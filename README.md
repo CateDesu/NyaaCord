@@ -1,6 +1,6 @@
 # NyaaCord
 
-Linux · [Downloads](https://github.com/CateDesu/NyaaCord/releases) · [Discord](https://discord.com/invite/TQJrbZcgKF)
+Linux & Windows · [Downloads](https://github.com/CateDesu/NyaaCord/releases) · [Discord](https://discord.com/invite/TQJrbZcgKF)
 
 <img src="web/plugins/nyaacord.gif" alt="NyaaCord icon" width="96">
 
@@ -10,8 +10,9 @@ Set `SUNBIRD_TRAY=1` if you want the extra NyaaCord tray menu.
 
 ## Download
 
-- Latest AppImage: [NyaaCord-x86_64.AppImage](https://github.com/CateDesu/NyaaCord/releases/latest/download/NyaaCord-x86_64.AppImage)
-- Release page: [v0.1.0](https://github.com/CateDesu/NyaaCord/releases/tag/v0.1.0)
+- Latest Linux AppImage: [NyaaCord-x86_64.AppImage](https://github.com/CateDesu/NyaaCord/releases/latest/download/NyaaCord-x86_64.AppImage)
+- Latest Windows executable: [NyaaCord-x86_64.exe](https://github.com/CateDesu/NyaaCord/releases/latest/download/NyaaCord-x86_64.exe)
+- Release page: [v0.2.0](https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0)
 - Checksums: [SHA256SUMS.txt](https://github.com/CateDesu/NyaaCord/releases/latest/download/SHA256SUMS.txt)
 
 Make the AppImage executable and run it:
