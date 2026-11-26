@@ -12,6 +12,7 @@ phoenix-hook       = { workspace = true }
 phoenix-runtime    = { features = [ "sqlite" ], workspace = true }
 phoenix-sigs       = { workspace = true }
 phoenix-ui-desktop = { workspace = true }
+phoenix-updater    = { workspace = true }
 rquickjs           = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }

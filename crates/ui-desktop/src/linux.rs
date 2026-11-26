@@ -3,6 +3,7 @@
 
 use std::{
    env,
+   ffi::OsString,
    io::{
       BufRead as _,
       BufReader,
@@ -25,8 +26,8 @@ use crate::{
    spawn_reaped,
 };
 
-/// The tray icon as an AppIndicator (`StatusNotifierItem`, which KDE shows
-/// natively and GNOME with its AppIndicator extension), run by the system
+/// The tray icon as an `AppIndicator` (`StatusNotifierItem`, which KDE shows
+/// natively and GNOME with its `AppIndicator` extension), run by the system
 /// Python's GTK bindings so Discord's process loads no GTK. Takes the icon,
 /// then one label per [`TrayAction::MENU`] entry, empty for a separator.
 /// Prints the index of each clicked entry and exits when its stdin closes,
@@ -42,7 +43,7 @@ except (ValueError, ImportError):
     gi.require_version("AppIndicator3", "0.1")
     from gi.repository import AppIndicator3 as AI
 tray = AI.Indicator.new("sunbird", sys.argv[1], AI.IndicatorCategory.APPLICATION_STATUS)
-tray.set_title("Sunbird")
+tray.set_title("NyaaCord")
 menu = Gtk.Menu()
 for at, label in enumerate(sys.argv[2:]):
     item = Gtk.MenuItem(label=label) if label else Gtk.SeparatorMenuItem()
@@ -132,14 +133,14 @@ impl DesktopHost for Host {
       let mut zenity = Command::new("zenity");
       zenity.args([
          "--file-selection",
-         "--title=Install Sunbird Plugin (.js)",
+         "--title=Install NyaaCord Plugin (.js)",
          "--file-filter=JavaScript Plugins | *.js",
          "--file-filter=All Files | *",
       ]);
       let mut kdialog = Command::new("kdialog");
       kdialog.args([
          "--title",
-         "Install Sunbird Plugin (.js)",
+         "Install NyaaCord Plugin (.js)",
          "--getopenfilename",
          ".",
          "*.js|JavaScript Plugins",
@@ -155,22 +156,28 @@ impl DesktopHost for Host {
 
    fn notify(title: &str, body: &str) {
       let mut send = Command::new("notify-send");
-      send.args(["--app-name=Sunbird", "--", title, body]);
+      send.args(["--app-name=NyaaCord", "--hint=string:desktop-entry:sunbird"]);
+      if let Some(icon) = nyaacord_icon_path() {
+         let mut arg = OsString::from("--icon=");
+         arg.push(&icon);
+         send.arg(arg);
+      }
+      send.args(["--", title, body]);
       if let Err(err) = spawn_reaped(&mut send) {
          log::debug!("notify: {err}");
       }
    }
 
    fn start_tray() {
+      static STARTED: Once = Once::new();
       // Phoenix already has a Linux tray icon.
       if !env::var("SUNBIRD_TRAY").is_ok_and(|value| value == "1") {
          return;
       }
-      static STARTED: Once = Once::new();
       STARTED.call_once(|| {
          if let Err(err) = start_indicator() {
             log::info!(
-               "tray: {err}, Sunbird Settings is at {}",
+               "tray: {err}, NyaaCord Settings is at {}",
                config().map_or("", |config| &config.dashboard_url)
             );
          }
@@ -178,8 +185,34 @@ impl DesktopHost for Host {
    }
 }
 
-/// Discord's own icon from its AppImage or package, else its icon name.
-fn icon() -> String {
+fn nyaacord_icon_path() -> Option<PathBuf> {
+   if let Some(raw) = env::var_os("NYAACORD_ICON")
+      && !raw.is_empty()
+   {
+      let path = PathBuf::from(raw);
+      if path.is_file() {
+         return Some(path.canonicalize().unwrap_or(path));
+      }
+   }
+   let data_home = env::var_os("XDG_DATA_HOME")
+      .filter(|value| !value.is_empty())
+      .map(PathBuf::from)
+      .or_else(|| {
+         env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .map(|home| PathBuf::from(home).join(".local/share"))
+      })?;
+   let path = data_home.join("sunbird/nyaacord.png");
+   path
+      .is_file()
+      .then(|| path.canonicalize().unwrap_or(path))
+}
+
+/// `NyaaCord`'s icon, then Discord's icon from its `AppImage` or package, else its icon name.
+fn icon() -> OsString {
+   if let Some(path) = nyaacord_icon_path() {
+      return path.into_os_string();
+   }
    env::current_exe()
       .ok()
       .and_then(|exe| {
@@ -192,8 +225,8 @@ fn icon() -> String {
       .map(|dir| dir.join("com.discord.libdiscord.png"))
       .filter(|png| png.is_file())
       .map_or_else(
-         || "com.discord.libdiscord".to_owned(),
-         |png| png.to_string_lossy().into_owned(),
+         || OsString::from("com.discord.libdiscord"),
+         PathBuf::into_os_string,
       )
 }
 
@@ -232,7 +265,7 @@ fn start_indicator() -> Result<(), Error> {
          drop(stdin);
          if child.wait().is_ok_and(|status| !status.success()) {
             log::info!(
-               "tray: needs python3 with GTK 3 and AppIndicator bindings; Sunbird Settings is at \
+               "tray: needs python3 with GTK 3 and AppIndicator bindings; NyaaCord Settings is at \
                 {}",
                config().map_or("", |config| &config.dashboard_url)
             );

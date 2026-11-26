@@ -1,5 +1,5 @@
 //! phoenix on Desktop Phoenix: the access gate, the HTTP transport hooks, the
-//! Sunbird pages in User Settings, message accessories and the tray.
+//! `NyaaCord` pages in User Settings, message accessories and the tray.
 
 #![cfg(any(windows, all(target_os = "linux", target_arch = "x86_64")))]
 
@@ -126,7 +126,7 @@ pub fn prepare() -> Result<(), Error> {
 }
 
 /// Opens the access gate and hooks nothing else, so Discord runs as it would
-/// without Sunbird. For telling Discord's own behaviour from ours.
+/// without `NyaaCord`. For telling Discord's own behaviour from ours.
 pub fn open_gate_only() -> Result<(), Error> {
    phoenix_runtime::set_platform(&Desktop);
    open_access_gate(&phoenix_runtime::target()?);
@@ -248,8 +248,8 @@ impl Platform for Desktop {
          on_check_updates: Some(Arc::new(phoenix_runtime::update::check_now)),
       });
       phoenix_ui_desktop::notify(
-         "Sunbird ready",
-         Some("Open User Settings -> Sunbird, or press Ctrl+Shift+I for DevTools"),
+         "NyaaCord ready",
+         Some("Open Sunbird in User Settings for plugins, or press Ctrl+Shift+I for DevTools"),
       );
       phoenix_runtime::update::check();
    }
@@ -267,7 +267,7 @@ impl Platform for Desktop {
          Notice::UpdateAvailable(update) => {
             let mut parts = Vec::new();
             if let Some(version) = &update.loader {
-               parts.push(format!("Sunbird {version} (restart to update)"));
+               parts.push(format!("NyaaCord v{version} is available"));
             }
             if !update.plugins.is_empty() {
                parts.push(format!("plugins: {}", update.plugins.join(", ")));
@@ -277,13 +277,130 @@ impl Platform for Desktop {
             } else {
                parts.join(" · ")
             };
-            phoenix_ui_desktop::notify("Sunbird update available", Some(&body));
+            phoenix_ui_desktop::notify("NyaaCord updates available", Some(&body));
          },
          Notice::PluginsUpdated(names) if !names.is_empty() => {
             let body = format!("Reloaded: {}", names.join(", "));
             phoenix_ui_desktop::notify("Plugins updated", Some(&body));
          },
          Notice::PluginsUpdated(_) => {},
+      }
+   }
+
+   #[cfg(any(windows, target_os = "linux"))]
+   fn app_version(&self) -> &'static str {
+      phoenix_runtime::update::APP_VERSION
+   }
+
+   #[cfg(any(windows, target_os = "linux"))]
+   fn check_app_update(&self) -> Option<Result<Option<phoenix_runtime::update::AppRelease>, String>> {
+      let result = phoenix_updater::Config::from_env()
+         .and_then(|cfg| phoenix_updater::check_latest(phoenix_runtime::update::APP_VERSION, &cfg))
+         .map(|check| {
+            match check {
+               phoenix_updater::CheckResult::UpToDate { .. } => None,
+               phoenix_updater::CheckResult::Available(rel) => {
+                  Some(phoenix_runtime::update::AppRelease {
+                     version:      rel.version,
+                     tag_name:     rel.tag_name,
+                     asset_name:   rel.asset_name,
+                     download_url: rel.download_url,
+                     size:         rel.size,
+                     sha256:       rel.sha256,
+                     release_url:  rel.release_url,
+                  })
+               },
+            }
+         })
+         .map_err(|err| err.to_string());
+      Some(result)
+   }
+
+   #[cfg(any(windows, target_os = "linux"))]
+   fn updates_loader(&self) -> bool {
+      target_package_path().is_some()
+   }
+
+   #[cfg(any(windows, target_os = "linux"))]
+   fn update_loader(&self, version: &str, update: &phoenix_runtime::update::Update) {
+      match run_package_update(version, update) {
+         Ok(outcome) => {
+            #[cfg(target_os = "linux")]
+            sync_managed_version(&outcome.target, &outcome.version);
+            phoenix_runtime::update::clear_found();
+
+            #[cfg(windows)]
+            {
+               let ver = outcome.version;
+               phoenix_runtime::update::finish(Some(format!(
+                  "Updated to NyaaCord v{ver}. Restart NyaaCord to apply."
+               )));
+               phoenix_ui_desktop::notify(
+                  "NyaaCord updated",
+                  Some(&format!("Updated to v{ver}. Restart NyaaCord to apply.")),
+               );
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+               let no_relaunch =
+                  std::env::var("NYAACORD_NO_RELAUNCH").is_ok_and(|value| value == "1");
+               if no_relaunch {
+                  let ver = outcome.version;
+                  phoenix_runtime::update::finish(Some(format!(
+                     "Updated to NyaaCord v{ver}. Restart NyaaCord to apply."
+                  )));
+                  phoenix_ui_desktop::notify(
+                     "NyaaCord updated",
+                     Some(&format!("Updated to v{ver}. Restart NyaaCord to apply.")),
+                  );
+                  return;
+               }
+               match phoenix_updater::spawn_relaunch_watchdog(
+                  &outcome.target,
+                  outcome.previous.as_deref(),
+                  std::process::id(),
+               ) {
+                  Ok(()) => {
+                     let ver = outcome.version;
+                     phoenix_runtime::update::finish(Some(format!(
+                        "Updated to NyaaCord v{ver}. Restarting..."
+                     )));
+                     phoenix_ui_desktop::notify(
+                        "NyaaCord updated",
+                        Some(&format!("Updated to v{ver}. Restarting...")),
+                     );
+                     std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_millis(500));
+                        // SAFETY: signals this process to exit so the detached watchdog
+                        // relaunches the updated AppImage.
+                        unsafe {
+                           libc::kill(libc::getpid(), libc::SIGTERM);
+                        }
+                        std::thread::sleep(Duration::from_secs(1));
+                        std::process::exit(0);
+                     });
+                  },
+                  Err(err) => {
+                     log::warn!("relaunch watchdog: {err}");
+                     let ver = outcome.version;
+                     phoenix_runtime::update::finish(Some(format!(
+                        "Updated to NyaaCord v{ver}. Restart NyaaCord to apply."
+                     )));
+                     phoenix_ui_desktop::notify(
+                        "NyaaCord updated",
+                        Some(&format!("Updated to v{ver}. Restart NyaaCord to apply.")),
+                     );
+                  },
+               }
+            }
+         },
+         Err(err) => {
+            let msg = format!("Update failed: {err}");
+            log::error!("{msg}");
+            phoenix_runtime::update::finish(Some(msg.clone()));
+            phoenix_ui_desktop::toast(&msg);
+         },
       }
    }
 
@@ -298,6 +415,9 @@ impl Platform for Desktop {
       match (request.method.as_str(), request.path.as_str()) {
          ("GET", "/ui") => Some(html()),
          ("GET", "/") if request.accept.contains("text/html") => Some(html()),
+         ("GET", "/icon.gif" | "/favicon.ico") => {
+            Some(("200 OK", "image/gif", phoenix_ui_desktop::ICON_GIF.to_vec()))
+         },
          ("POST", "/ui/devtools") => {
             phoenix_ui_desktop::open_devtools();
             Some(remote::ok_json(&Done::Started))
@@ -309,7 +429,7 @@ impl Platform for Desktop {
    }
 
    fn routes(&self) -> &'static str {
-      ", GET /ui, POST /ui/devtools, POST /ui/{choose,sheet}"
+      ", GET /ui, GET /icon.gif, POST /ui/devtools, POST /ui/{choose,sheet}"
    }
 }
 
@@ -359,7 +479,262 @@ fn dialog(body: &[u8], sheet: bool) -> remote::Reply {
          },
       );
    }
-   let title = request.title.unwrap_or_else(|| "Sunbird".to_owned());
+   let title = request.title.unwrap_or_else(|| "NyaaCord".to_owned());
    let index = modal::ask(title, content, options, Duration::from_secs(120));
    remote::ok_json(&DialogAnswer { index })
+}
+
+#[cfg(target_os = "linux")]
+fn xdg_sunbird_dir() -> Option<PathBuf> {
+   let data_home = std::env::var_os("XDG_DATA_HOME")
+      .filter(|value| !value.is_empty())
+      .map(PathBuf::from)
+      .or_else(|| {
+         std::env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .map(|home| PathBuf::from(home).join(".local/share"))
+      })?;
+   Some(data_home.join("sunbird"))
+}
+
+#[cfg(target_os = "linux")]
+fn is_nyaacord_appimage_env(appimage: &Path, has_nyaacord_appdir: bool) -> bool {
+   has_nyaacord_appdir
+      || appimage
+         .file_name()
+         .and_then(|name| name.to_str())
+         .is_some_and(|name| name.to_ascii_lowercase().contains("nyaacord"))
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_target_appimage(
+   managed: Option<PathBuf>,
+   appimage: Option<PathBuf>,
+   has_nyaacord_appdir: bool,
+   sunbird_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+   // Prefer NYAACORD_MANAGED_APPIMAGE over APPIMAGE so local_loader installs
+   // launched via `sunbird` never overwrite the user's base discord-phoenix AppImage.
+   if let Some(path) = managed
+      && !path.as_os_str().is_empty()
+      && !phoenix_updater::is_mount_path(&path)
+   {
+      return Some(path);
+   }
+   if let Some(path) = appimage
+      && !path.as_os_str().is_empty()
+      && is_nyaacord_appimage_env(&path, has_nyaacord_appdir)
+      && !phoenix_updater::is_mount_path(&path)
+   {
+      return Some(path);
+   }
+   let dir = sunbird_dir?;
+   let candidate = dir.join("NyaaCord-x86_64.AppImage");
+   if (candidate.exists() || dir.is_dir()) && !phoenix_updater::is_mount_path(&candidate) {
+      return Some(candidate);
+   }
+   None
+}
+
+#[cfg(target_os = "linux")]
+fn target_appimage_path() -> Option<PathBuf> {
+   let managed = std::env::var_os("NYAACORD_MANAGED_APPIMAGE")
+      .filter(|value| !value.is_empty())
+      .map(PathBuf::from);
+   let appimage = std::env::var_os("APPIMAGE")
+      .filter(|value| !value.is_empty())
+      .map(PathBuf::from);
+   let has_nyaacord_appdir =
+      std::env::var_os("NYAACORD_APPDIR").is_some_and(|value| !value.is_empty());
+   resolve_target_appimage(managed, appimage, has_nyaacord_appdir, xdg_sunbird_dir())
+}
+
+#[cfg(target_os = "linux")]
+fn sync_managed_version(target: &Path, version: &str) {
+   let Some(dir) = target.parent() else {
+      return;
+   };
+   let launcher_matches = std::env::var_os("NYAACORD_LAUNCHER")
+      .filter(|value| !value.is_empty())
+      .map(PathBuf::from)
+      .and_then(|launcher| launcher.parent().map(Path::to_path_buf))
+      .is_some_and(|launcher_dir| launcher_dir == dir);
+   let managed = launcher_matches || (dir.join("sunbird").exists() && dir.join("version").exists());
+   if managed && let Err(err) = std::fs::write(dir.join("version"), format!("{version}\n")) {
+      log::warn!("updating managed version file: {err}");
+   }
+}
+
+#[cfg(any(windows, test))]
+fn resolve_target_windows_exe(
+   managed: Option<PathBuf>,
+   local_app_data: Option<PathBuf>,
+   dir_exists: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+   if let Some(path) = managed
+      && !path.as_os_str().is_empty()
+   {
+      return Some(path);
+   }
+   let base = local_app_data.filter(|dir| !dir.as_os_str().is_empty())?;
+   let dir = base.join("NyaaCord");
+   let exe = dir.join("NyaaCord.exe");
+   if dir_exists(&exe) || dir_exists(&dir) {
+      return Some(exe);
+   }
+   None
+}
+
+#[cfg(windows)]
+fn target_package_path() -> Option<PathBuf> {
+   let managed = std::env::var_os("NYAACORD_MANAGED_EXE")
+      .filter(|value| !value.is_empty())
+      .map(PathBuf::from);
+   let local = std::env::var_os("LOCALAPPDATA")
+      .filter(|value| !value.is_empty())
+      .map(PathBuf::from);
+   resolve_target_windows_exe(managed, local, Path::exists)
+}
+
+#[cfg(target_os = "linux")]
+fn target_package_path() -> Option<PathBuf> {
+   target_appimage_path()
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn run_package_update(
+   version: &str,
+   update: &phoenix_runtime::update::Update,
+) -> Result<phoenix_updater::ApplyOutcome, String> {
+   let target =
+      target_package_path().ok_or_else(|| "no writable launcher path found".to_owned())?;
+   let cfg = phoenix_updater::Config::from_env().map_err(|err| err.to_string())?;
+   let release = match &update.release {
+      Some(rel) => {
+         phoenix_updater::ReleaseInfo {
+            version:      rel.version.clone(),
+            tag_name:     rel.tag_name.clone(),
+            asset_name:   rel.asset_name.clone(),
+            download_url: rel.download_url.clone(),
+            size:         rel.size,
+            sha256:       rel.sha256.clone(),
+            release_url:  rel.release_url.clone(),
+         }
+      },
+      None => phoenix_updater::fetch_latest(&cfg).map_err(|err| err.to_string())?,
+   };
+   let display_version = if release.version.is_empty() {
+      version
+   } else {
+      release.version.as_str()
+   };
+   phoenix_runtime::update::set_status(Some(format!(
+      "Downloading NyaaCord v{display_version}..."
+   )));
+   let mut last_pct: Option<u64> = None;
+   let mut last_mb: u64 = 0;
+   let mut on_progress = |downloaded: u64, total: Option<u64>| {
+      let known_total = total
+         .filter(|&bytes| bytes > 0)
+         .or_else(|| (release.size > 0).then_some(release.size));
+      if let Some(total_bytes) = known_total {
+         let pct = downloaded
+            .saturating_mul(100)
+            .checked_div(total_bytes)
+            .unwrap_or(0)
+            .min(100);
+         if last_pct.is_none_or(|prev| pct >= prev + 5 || (pct == 100 && prev != 100)) {
+            last_pct = Some(pct);
+            phoenix_runtime::update::set_status(Some(format!(
+               "Downloading NyaaCord v{display_version} ({pct}%)..."
+            )));
+         }
+      } else {
+         let mb = downloaded / (1024 * 1024);
+         if mb >= last_mb + 5 {
+            last_mb = mb;
+            phoenix_runtime::update::set_status(Some(format!(
+               "Downloading NyaaCord v{display_version} ({mb} MiB)..."
+            )));
+         }
+      }
+   };
+   phoenix_updater::apply_update(&release, &target, &cfg, &mut on_progress)
+      .map_err(|err| err.to_string())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+   use super::*;
+
+   #[test]
+   fn detects_appimage_mount_paths() {
+      assert!(phoenix_updater::is_mount_path(Path::new(
+         "/tmp/.mount_NyaaCord1234/AppRun"
+      )));
+      assert!(phoenix_updater::is_mount_path(Path::new(
+         "/home/cate/.t3/tmp/.mount_NyaaCord1234/AppRun"
+      )));
+      assert!(phoenix_updater::is_mount_path(Path::new("/tmp/.mount_abc")));
+      assert!(!phoenix_updater::is_mount_path(Path::new(
+         "/home/cate/.local/share/sunbird/NyaaCord-x86_64.AppImage"
+      )));
+      assert!(!phoenix_updater::is_mount_path(Path::new(
+         "/tmp/nyaacord-test/NyaaCord-x86_64.AppImage"
+      )));
+   }
+
+   #[test]
+   fn resolves_target_appimage_without_touching_base_discord() {
+      let managed = PathBuf::from("/home/cate/.local/share/sunbird/NyaaCord-x86_64.AppImage");
+      let discord = PathBuf::from("/home/cate/Applications/discord-phoenix.AppImage");
+      let custom = PathBuf::from("/home/cate/Apps/custom-chat.AppImage");
+
+      // Managed AppImage takes precedence over stock discord-phoenix APPIMAGE.
+      assert_eq!(
+         resolve_target_appimage(Some(managed.clone()), Some(discord.clone()), false, None),
+         Some(managed)
+      );
+
+      // Stock discord-phoenix APPIMAGE without NYAACORD_APPDIR is ignored.
+      assert_eq!(
+         resolve_target_appimage(None, Some(discord), false, None),
+         None
+      );
+
+      // Standalone renamed NyaaCord AppImage with NYAACORD_APPDIR is accepted.
+      assert_eq!(
+         resolve_target_appimage(None, Some(custom.clone()), true, None),
+         Some(custom)
+      );
+
+      // Mount paths are never selected as targets.
+      assert_eq!(
+         resolve_target_appimage(
+            Some(PathBuf::from("/var/tmp/.mount_NyaaCo1234/AppRun")),
+            None,
+            false,
+            None
+         ),
+         None
+      );
+   }
+
+   #[test]
+   fn resolves_target_windows_exe_paths() {
+      let explicit = PathBuf::from(r"D:\Portable\NyaaCord-x86_64.exe");
+      let local = PathBuf::from(r"C:\Users\cate\AppData\Local");
+
+      assert_eq!(
+         resolve_target_windows_exe(Some(explicit.clone()), Some(local.clone()), |_| true),
+         Some(explicit)
+      );
+      assert_eq!(
+         resolve_target_windows_exe(None, Some(local.clone()), |path| {
+            path == local.join("NyaaCord")
+         }),
+         Some(local.join("NyaaCord").join("NyaaCord.exe"))
+      );
+      assert_eq!(resolve_target_windows_exe(None, Some(local), |_| false), None);
+   }
 }

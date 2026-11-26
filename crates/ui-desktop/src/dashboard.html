@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Sunbird — Desktop Settings</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%231e1f22'/><circle cx='16' cy='16' r='12' fill='%23f59e0b'/><circle cx='16' cy='16' r='5' fill='%23fff3b0'/></svg>" />
+<title>NyaaCord Settings</title>
+<link rel="icon" type="image/gif" href="/icon.gif" />
 <style>
   :root {
     --bg: #111214;
@@ -48,6 +48,7 @@
     gap: 8px;
   }
   .brand-left { display: flex; align-items: center; gap: 8px; }
+  .brand-icon { width: 24px; height: 24px; border-radius: 5px; flex-shrink: 0; object-fit: cover; }
   .dot {
     width: 10px; height: 10px; border-radius: 50%;
     background: var(--green); flex-shrink: 0;
@@ -274,7 +275,7 @@
 <body>
 <nav>
   <div class="brand">
-    <span class="brand-left"><span id="conn-dot" class="dot"></span><span>Sunbird</span></span>
+    <span class="brand-left"><img class="brand-icon" src="/icon.gif" alt="" /><span id="conn-dot" class="dot"></span><span>NyaaCord</span></span>
     <span id="version-pill" class="pill">…</span>
   </div>
   <button class="active" data-tab="plugins">Plugins</button>
@@ -324,10 +325,10 @@
 
   <section id="tab-updates" class="hidden">
     <h1>Updates</h1>
-    <p class="sub">Check for new Sunbird builds and over-the-air plugin updates.</p>
+    <p class="sub">Check CateDesu/NyaaCord releases for updates. Updating replaces the whole AppImage while keeping your settings and plugins.</p>
     <div class="toolbar">
       <button class="btn primary" id="check-update-btn">Check for updates</button>
-      <button class="btn" id="apply-update-btn">Apply plugin updates</button>
+      <button class="btn" id="apply-update-btn" disabled>Update NyaaCord</button>
     </div>
     <div id="update-box" class="card"></div>
   </section>
@@ -353,7 +354,7 @@
       <div class="settings" style="border-top:none;padding-top:0;margin-top:0">
         <div class="setting">
           <div class="setting-info"><div>Title</div></div>
-          <div class="setting-ctrl"><input id="dialog-title" type="text" value="Sunbird" /></div>
+          <div class="setting-ctrl"><input id="dialog-title" type="text" value="NyaaCord" /></div>
         </div>
         <div class="setting">
           <div class="setting-info">
@@ -396,6 +397,9 @@ if (IS_EMBEDDED) document.body.classList.add('embedded');
 let installedNames = new Set();
 let activeTab = 'plugins';
 let catalogTimer = null;
+let updatePollToken = 0;
+let updatePollActive = false;
+let updatePollRefreshPlugins = false;
 
 const DESKTOP_FULL = new Set([
   'silent-typing', 'message-latency', 'message-logger', 'no-profile-themes',
@@ -427,7 +431,7 @@ function setConnected(ok, errMsg = '') {
   if (ok) {
     banner.classList.add('hidden');
   } else {
-    banner.textContent = 'Lost connection to Sunbird runtime: ' + errMsg;
+    banner.textContent = 'Lost connection to NyaaCord: ' + errMsg;
     banner.classList.remove('hidden');
   }
 }
@@ -444,7 +448,17 @@ async function api(path, opts = {}, rawText = false) {
 function esc(s) {
   const d = document.createElement('div');
   d.textContent = s == null ? '' : String(s);
-  return d.innerHTML;
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function isHttpUrl(url) {
+  if (typeof url !== 'string' || /[\u0000-\u0020\u007f]/.test(url)) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
 }
 
 function switchTab(tab) {
@@ -530,9 +544,9 @@ async function loadPlugins() {
     if (!status.plugins.length) {
       root.innerHTML = `
         <div class="card">
-          <div class="title" style="margin-bottom:6px">Welcome to Sunbird Desktop</div>
+          <div class="title" style="margin-bottom:6px">Welcome to NyaaCord</div>
           <div class="meta" style="margin-bottom:14px;color:var(--text)">
-            Sunbird is connected to Discord Phoenix. Install plugins from the official catalog or load a local <code>.js</code> bundle to get started.
+            NyaaCord is connected to Phoenix. Install plugins from the official catalog or load a local <code>.js</code> bundle to get started.
           </div>
           <div class="toolbar" style="margin:0">
             <button class="btn primary" id="empty-browse-btn">Browse Plugin Catalog</button>
@@ -801,52 +815,99 @@ $('#install-url-btn').onclick = async () => {
   }
 };
 
-async function loadUpdates() {
+async function loadUpdates(startPollIfBusy = true) {
   try {
     const st = await api('/update');
-    const lines = [`Current version: ${st.version}`];
-    if (st.busy) lines.push('Status: working…');
-    if (st.status) lines.push(`Detail: ${st.status}`);
+    if (st.version) $('#version-pill').textContent = st.version;
+    const rows = [`<div>${esc(`Current version: ${st.version}`)}</div>`];
+    if (st.busy) rows.push('<div>Status: working…</div>');
+    if (st.status) rows.push(`<div>${esc(`Detail: ${st.status}`)}</div>`);
     if (st.found) {
-      if (st.found.loader) lines.push(`Newer Sunbird build: ${st.found.loader} (restart Sunbird to update)`);
-      if (st.found.plugins.length) lines.push(`Plugin updates: ${st.found.plugins.join(', ')}`);
-    } else {
-      lines.push('Up to date.');
+      if (st.found.loader) {
+        const ver = String(st.found.loader).replace(/^v/i, '');
+        const label = esc(`NyaaCord v${ver} is available`);
+        if (isHttpUrl(st.found.release_url)) {
+          rows.push(`<div>${label} · <a href="${esc(st.found.release_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">Release notes</a></div>`);
+        } else {
+          rows.push(`<div>${label}</div>`);
+        }
+      }
+      if (st.found.plugins && st.found.plugins.length) {
+        rows.push(`<div>${esc(`Plugin updates: ${st.found.plugins.join(', ')}`)}</div>`);
+      }
+    } else if (!st.busy && !st.status) {
+      rows.push('<div>Up to date.</div>');
     }
-    $('#update-box').innerHTML = lines.map((l) => `<div>${esc(l)}</div>`).join('');
-    $('#apply-update-btn').disabled = !st.found || !st.found.plugins.length || st.busy;
+    $('#update-box').innerHTML = rows.join('');
+    const hasLoaderUpdate = !!st.found && !!st.found.loader && !!st.can_update;
+    const hasPluginUpdates = !!st.found && Array.isArray(st.found.plugins) && st.found.plugins.length > 0;
+    const canApply = !st.busy && (hasLoaderUpdate || hasPluginUpdates);
+    const applyBtn = $('#apply-update-btn');
+    applyBtn.textContent = hasLoaderUpdate
+      ? `Update to v${String(st.found.loader).replace(/^v/i, '')}`
+      : 'Update NyaaCord';
+    applyBtn.disabled = !canApply;
+    $('#check-update-btn').disabled = !!st.busy;
+    if (startPollIfBusy && st.busy && !updatePollActive) {
+      pollUpdateUntilDone(false);
+    }
     return st;
   } catch (err) {
     setConnected(false, err.message);
+    $('#apply-update-btn').disabled = true;
+    $('#check-update-btn').disabled = false;
     return null;
   }
 }
 
 async function pollUpdateUntilDone(refreshPlugins) {
-  for (let i = 0; i < 15; i++) {
+  updatePollRefreshPlugins = updatePollRefreshPlugins || refreshPlugins;
+  const token = ++updatePollToken;
+  updatePollActive = true;
+  let last = await loadUpdates(false);
+  for (let i = 0; i < 600 && last && last.busy; i++) {
     await new Promise((r) => setTimeout(r, 700));
-    const st = await loadUpdates();
-    if (!st || !st.busy) break;
+    if (token !== updatePollToken) return;
+    last = await loadUpdates(false);
   }
-  if (refreshPlugins) loadPlugins();
+  if (token !== updatePollToken) return;
+  updatePollActive = false;
+  const shouldRefresh = updatePollRefreshPlugins;
+  updatePollRefreshPlugins = false;
+  if (last && !last.busy) {
+    if (last.status) {
+      const isErr = /failed/i.test(last.status);
+      notify(last.status, isErr);
+    } else if (last.found && last.found.loader) {
+      const ver = String(last.found.loader).replace(/^v/i, '');
+      notify(`NyaaCord v${ver} is available`);
+    }
+    if (shouldRefresh) loadPlugins();
+  }
 }
 
 $('#check-update-btn').onclick = async () => {
+  $('#check-update-btn').disabled = true;
+  $('#apply-update-btn').disabled = true;
   try {
     await api('/update/check', { method: 'POST' });
     notify('Checking for updates…');
     pollUpdateUntilDone(false);
   } catch (err) {
     notify(`Check failed: ${err.message}`, true);
+    loadUpdates(false);
   }
 };
 $('#apply-update-btn').onclick = async () => {
+  $('#check-update-btn').disabled = true;
+  $('#apply-update-btn').disabled = true;
   try {
     await api('/update/apply', { method: 'POST' });
-    notify('Applying plugin updates…');
+    notify('Updating NyaaCord…');
     pollUpdateUntilDone(true);
   } catch (err) {
-    notify(`Apply failed: ${err.message}`, true);
+    notify(`Update failed: ${err.message}`, true);
+    loadUpdates(false);
   }
 };
 

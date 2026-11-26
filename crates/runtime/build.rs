@@ -24,4 +24,19 @@ fn main() {
       .filter(|version| !version.is_empty())
       .unwrap_or_else(|| "0".to_owned());
    println!("cargo:rustc-env=PHOENIX_VERSION={version}");
+
+   println!("cargo:rerun-if-env-changed=NYAACORD_VERSION");
+   let pkg_version = env!("CARGO_PKG_VERSION");
+   let raw_app_version = std::env::var("NYAACORD_VERSION")
+      .ok()
+      .filter(|value| !value.trim().is_empty())
+      .unwrap_or_else(|| pkg_version.to_owned());
+   let trimmed = raw_app_version.trim();
+   let stripped = trimmed.strip_prefix(['v', 'V']).unwrap_or(trimmed).trim();
+   let app_version = if stripped.is_empty() || stripped.contains(['\r', '\n']) {
+      pkg_version
+   } else {
+      stripped
+   };
+   println!("cargo:rustc-env=NYAACORD_VERSION={app_version}");
 }

@@ -1,7 +1,7 @@
 //! Lightweight Discord main-window subclass for Desktop Phoenix.
 //!
 //! Subclasses Discord's main GPUI `HWND` so pressing `Ctrl+Shift+I` while
-//! Discord Phoenix is focused opens the Sunbird `DevTools` / Runtime Console
+//! Discord Phoenix is focused opens the `NyaaCord` `DevTools` / Runtime Console
 //! without registering a global hotkey that would steal `Ctrl+Shift+I` from
 //! browsers or editors.
 

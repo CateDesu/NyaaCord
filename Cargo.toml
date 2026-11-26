@@ -14,6 +14,7 @@ members  = [
   "crates/stand-in-demo",
   "crates/ui-desktop",
   "crates/ui-mobile",
+  "crates/updater",
   "crates/wire",
 ]
 resolver = "3"
@@ -49,6 +50,7 @@ phoenix-runtime-mobile  = { path = "crates/runtime-mobile" }
 phoenix-sigs            = { path = "crates/sigs" }
 phoenix-ui-desktop      = { path = "crates/ui-desktop" }
 phoenix-ui-mobile       = { path = "crates/ui-mobile" }
+phoenix-updater         = { path = "crates/updater" }
 phoenix-wire            = { path = "crates/wire" }
 rquickjs                = { features = [ "parallel" ], version = "0.14" }
 rusqlite                = { default-features = false, features = [ "bundled" ], version = "0.35" }

@@ -193,10 +193,10 @@ fn home() -> PathBuf {
 }
 
 #[cfg_attr(
-   not(unix),
+   not(any(unix, windows)),
    allow(
       clippy::missing_const_for_fn,
-      reason = "only the unix body reads a bundle"
+      reason = "unix and windows read a bundle from disk"
    )
 )]
 fn bundled() -> Vec<Plugin> {
@@ -210,16 +210,116 @@ fn bundled() -> Vec<Plugin> {
          },
       }
    }
-   #[cfg(not(unix))]
+   #[cfg(windows)]
+   {
+      match windows::read_bundle() {
+         Ok(plugins) => plugins,
+         Err(err) => {
+            log::error!("plugin bundle: {err}");
+            Vec::new()
+         },
+      }
+   }
+   #[cfg(not(any(unix, windows)))]
    {
       Vec::new()
+   }
+}
+
+#[cfg(any(unix, windows, test))]
+fn parse_bundle(bytes: &[u8]) -> Result<Vec<Plugin>, serde_json::Error> {
+   let plugins: std::collections::BTreeMap<String, String> = serde_json::from_slice(bytes)?;
+   Ok(plugins
+      .into_iter()
+      .map(|(name, source)| Plugin { name, source })
+      .collect())
+}
+
+#[cfg(windows)]
+mod windows {
+   use std::{
+      ffi::{
+         OsString,
+         c_void,
+      },
+      fs,
+      io::ErrorKind,
+      os::windows::ffi::OsStringExt,
+      path::PathBuf,
+      ptr,
+   };
+
+   use phoenix_runtime::Plugin;
+   use phoenix_sigs::PLUGIN_BUNDLE;
+
+   const GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT: u32 = 0x0000_0002;
+   const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x0000_0004;
+
+   #[link(name = "kernel32")]
+   unsafe extern "system" {
+      fn GetModuleHandleExW(
+         flags: u32,
+         module_name: *const c_void,
+         module: *mut *mut c_void,
+      ) -> i32;
+      fn GetModuleFileNameW(module: *mut c_void, filename: *mut u16, size: u32) -> u32;
+   }
+
+   /// This DLL's path on disk, resolved from `DllMain`'s address.
+   fn library_path() -> Option<PathBuf> {
+      let mut module: *mut c_void = ptr::null_mut();
+      let addr = (super::DllMain as *const ()).cast::<c_void>();
+      // SAFETY: `addr` points inside this loaded DLL and `UNCHANGED_REFCOUNT`
+      // avoids incrementing the module reference count.
+      if unsafe {
+         GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            addr,
+            &raw mut module,
+         )
+      } == 0
+         || module.is_null()
+      {
+         return None;
+      }
+
+      let mut cap: usize = 260;
+      loop {
+         let mut buf = vec![0_u16; cap];
+         let buf_cap = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+         // SAFETY: `module` is this loaded DLL and `buf` holds `buf_cap` UTF-16 units.
+         let len = unsafe { GetModuleFileNameW(module, buf.as_mut_ptr(), buf_cap) } as usize;
+         if len == 0 {
+            return None;
+         }
+         if len < buf.len() {
+            return Some(PathBuf::from(OsString::from_wide(&buf[..len])));
+         }
+         if cap >= 32_768 {
+            return None;
+         }
+         cap = (cap * 2).min(32_768);
+      }
+   }
+
+   /// Reads [`PLUGIN_BUNDLE`] from beside `phoenix.dll`.
+   pub fn read_bundle() -> Result<Vec<Plugin>, String> {
+      let Some(path) = library_path() else {
+         return Ok(Vec::new());
+      };
+      let bundle_path = path.with_file_name(PLUGIN_BUNDLE);
+      let bytes = match fs::read(&bundle_path) {
+         Ok(bytes) => bytes,
+         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+         Err(err) => return Err(format!("{}: {err}", bundle_path.display())),
+      };
+      super::parse_bundle(&bytes).map_err(|err| format!("{}: {err}", bundle_path.display()))
    }
 }
 
 #[cfg(unix)]
 mod unix {
    use std::{
-      collections::BTreeMap,
       ffi::{
          CStr,
          c_void,
@@ -290,11 +390,7 @@ mod unix {
             Err(err) => return Err(err.into()),
          }
       };
-      let plugins: BTreeMap<String, String> = serde_json::from_slice(&bytes)?;
-      Ok(plugins
-         .into_iter()
-         .map(|(name, source)| Plugin { name, source })
-         .collect())
+      Ok(super::parse_bundle(&bytes)?)
    }
 }
 
@@ -547,5 +643,16 @@ mod tests {
          internal,
          PathBuf::from("/data/data/com.discord.phoenix/files")
       );
+   }
+
+   #[test]
+   fn parses_bundled_plugin_json() {
+      let raw = br#"{"view-raw":"console.log(1)","clear-urls":"console.log(2)"}"#;
+      let parsed = super::parse_bundle(raw).expect("valid plugin bundle JSON");
+      assert_eq!(parsed.len(), 2);
+      assert_eq!(parsed[0].name, "clear-urls");
+      assert_eq!(parsed[0].source, "console.log(2)");
+      assert_eq!(parsed[1].name, "view-raw");
+      assert_eq!(parsed[1].source, "console.log(1)");
    }
 }

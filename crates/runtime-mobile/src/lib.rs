@@ -72,7 +72,7 @@ pub fn start(home: PathBuf, bundled: Vec<Plugin>) -> Result<Started, Error> {
    phoenix_runtime::start(&Mobile, home, bundled)
 }
 
-/// Phoenix Unlock's green, for update banners.
+/// `NyaaCord`'s green, for update banners.
 const ACCENT: i64 = 0xFF23_A55A;
 
 impl Platform for Mobile {
@@ -200,10 +200,10 @@ impl Platform for Mobile {
                      update.plugins.join(", ")
                   )
                },
-               |version| format!("Build {version}, tap to update in-app"),
+               |version| format!("Upstream build {version}, tap to update in-app"),
             );
             banners::show_banner(
-               "Phoenix Unlock update available".to_owned(),
+               "NyaaCord updates available".to_owned(),
                Some(body),
                Some("res://ic_mana_puzzle_piece_retry".to_owned()),
                Some(ACCENT),

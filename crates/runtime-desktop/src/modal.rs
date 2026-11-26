@@ -1855,7 +1855,7 @@ fn build_overlay(window: *mut c_void, app: *mut c_void) -> Option<RawDiv> {
             None => {
                (
                   "Install Plugin from URL".to_owned(),
-                  Some("Paste an https:// URL pointing to a Sunbird .js plugin bundle.".to_owned()),
+                  Some("Paste an https:// URL pointing to a NyaaCord .js plugin bundle.".to_owned()),
                )
             },
          };

@@ -195,6 +195,20 @@ pub fn require_token(token_file: &Path) {
    write_token_file();
 }
 
+fn parse_shell_port(raw: &str) -> Option<u16> {
+   raw.trim().parse::<u16>().ok().filter(|&port| port >= 1024)
+}
+
+fn configured_shell_port() -> Option<u16> {
+   std::env::var("PHOENIX_SHELL_PORT")
+      .ok()
+      .and_then(|raw| parse_shell_port(&raw))
+}
+
+fn expected_shell_port() -> u16 {
+   configured_shell_port().unwrap_or(SHELL_PORT)
+}
+
 /// Writes the token where `dev.ps1` reads it, once this process owns the
 /// shell's port: a second launch that only hands off to the running client
 /// would otherwise replace the token the running shell checks.
@@ -203,10 +217,11 @@ fn write_token_file() {
    let (Some(token), Some(token_file)) = (TOKEN.get(), TOKEN_FILE.get()) else {
       return;
    };
+   let expected_port = expected_shell_port();
    let owns_port = BOUND_ADDR
       .get()
       .and_then(|addr| addr.parse::<SocketAddr>().ok())
-      .is_some_and(|addr| addr.port() == SHELL_PORT);
+      .is_some_and(|addr| addr.port() == expected_port);
    if !owns_port {
       return;
    }
@@ -293,6 +308,11 @@ pub fn bound_addr() -> &'static str {
 }
 
 fn bind_localhost() -> std::io::Result<(TcpListener, SocketAddr)> {
+   if let Some(port) = configured_shell_port() {
+      let listener = TcpListener::bind(("127.0.0.1", port))?;
+      let addr = listener.local_addr()?;
+      return Ok((listener, addr));
+   }
    for port in SHELL_PORT..=SHELL_PORT + 10 {
       if let Ok(listener) = TcpListener::bind(("127.0.0.1", port))
          && let Ok(addr) = listener.local_addr()
@@ -575,7 +595,7 @@ fn dispatch(req: &Request) -> Reply {
       ("GET", "/" | "/status") => {
          let plugins = crate::plugins();
          ok_json(&Status {
-            version:      crate::update::VERSION,
+            version:      crate::update::app_version(),
             staff:        crate::staff_enabled(),
             remote_shell: enabled(),
             plugins:      plugins.iter().map(PluginJson::from).collect(),
@@ -779,28 +799,37 @@ pub enum Done<'a> {
 fn update_state() -> Reply {
    #[derive(Serialize)]
    struct Found {
-      loader:  Option<String>,
-      plugins: Vec<String>,
+      loader:      Option<String>,
+      plugins:     Vec<String>,
+      release_url: Option<String>,
    }
 
    #[derive(Serialize)]
    struct State {
-      version: &'static str,
-      busy:    bool,
-      status:  Option<String>,
-      found:   Option<Found>,
+      version:    &'static str,
+      busy:       bool,
+      can_update: bool,
+      status:     Option<String>,
+      found:      Option<Found>,
    }
 
+   // Read `busy` with Acquire ordering before `status` and `found` so any
+   // completed check/apply publishes its final state before clearing `busy`.
+   let busy = crate::update::busy();
+   let status = crate::update::status();
+   let found = crate::update::found().map(|found| {
+      Found {
+         loader:      found.loader,
+         plugins:     found.plugins,
+         release_url: found.release.map(|rel| rel.release_url),
+      }
+   });
    ok_json(&State {
-      version: crate::update::VERSION,
-      busy:    crate::update::busy(),
-      status:  crate::update::status(),
-      found:   crate::update::found().map(|found| {
-         Found {
-            loader:  found.loader,
-            plugins: found.plugins,
-         }
-      }),
+      version: crate::update::app_version(),
+      busy,
+      can_update: crate::platform().is_some_and(<dyn crate::Platform>::updates_loader),
+      status,
+      found,
    })
 }
 
@@ -1019,5 +1048,16 @@ mod tests {
    fn decodes_percent_encoded_names() {
       assert_eq!(percent_decode("silent-typing"), "silent-typing");
       assert_eq!(percent_decode("my%20plugin"), "my plugin");
+   }
+
+   #[test]
+   fn parses_valid_shell_ports() {
+      assert_eq!(parse_shell_port("4249"), Some(4249));
+      assert_eq!(parse_shell_port(" 1024 "), Some(1024));
+      assert_eq!(parse_shell_port("65535"), Some(65535));
+      assert_eq!(parse_shell_port("1023"), None);
+      assert_eq!(parse_shell_port("0"), None);
+      assert_eq!(parse_shell_port("65536"), None);
+      assert_eq!(parse_shell_port("abc"), None);
    }
 }

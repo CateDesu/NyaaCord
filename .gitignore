@@ -14,6 +14,7 @@
 !flake.nix
 
 !.github/
+!.github/*.py
 !.github/workflows/
 !.github/workflows/*.yml
 
@@ -24,6 +25,8 @@
 !crates/*/src/
 !crates/*/src/**/
 !crates/*/src/**/*.rs
+!crates/*/tests/
+!crates/*/tests/**/*.rs
 !crates/runtime/phoenix.d.ts
 !crates/ui-desktop/src/dashboard.html
 !crates/ui-mobile/src/props.in
@@ -67,4 +70,5 @@
 !web/plugins/
 !web/plugins/frida-*.js
 !web/plugins/frida-gadget-*.so.gz
-!web/plugins/sunbird.png
+!web/plugins/nyaacord.png
+!web/plugins/nyaacord.gif

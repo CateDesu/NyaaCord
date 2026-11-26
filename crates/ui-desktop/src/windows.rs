@@ -303,17 +303,33 @@ fn os_err(context: &str) -> Error {
    }
 }
 
-/// Builds a crisp 32×32 ARGB Sunbird amber emblem icon for the system tray.
+/// Builds the `NyaaCord` fox ARGB icon for the Windows system tray, falling back
+/// to `IDI_APPLICATION` if decoding or GDI allocation fails.
 unsafe fn create_sunbird_icon() -> *mut c_void {
-   const SIZE: i32 = 32;
+   let fallback = || {
+      // SAFETY: `IDI_APPLICATION` is a standard Win32 stock icon identifier.
+      unsafe { LoadIconW(ptr::null_mut(), IDI_APPLICATION as *const u16) }
+   };
+
+   let Some(decoded) = crate::icon::decode_png_rgba(crate::ICON_PNG) else {
+      return fallback();
+   };
+   let Ok(width) = i32::try_from(decoded.width) else {
+      return fallback();
+   };
+   let Ok(height) = i32::try_from(decoded.height) else {
+      return fallback();
+   };
+   let bgra = decoded.to_bgra_u32();
+
    #[expect(
       clippy::cast_possible_truncation,
       reason = "BITMAPINFOHEADER is 40 bytes"
    )]
    let bmi = BitmapInfoHeader {
       bi_size:          size_of::<BitmapInfoHeader>() as u32,
-      bi_width:         SIZE,
-      bi_height:        -SIZE, // top-down DIB
+      bi_width:         width,
+      bi_height:        -height, // top-down DIB
       bi_planes:        1,
       bi_bit_count:     32,
       bi_compression:   BI_RGB,
@@ -336,31 +352,15 @@ unsafe fn create_sunbird_icon() -> *mut c_void {
          0,
       );
       if color.is_null() || bits.is_null() {
-         return LoadIconW(ptr::null_mut(), IDI_APPLICATION as *const u16);
+         return fallback();
       }
-      let pixels = std::slice::from_raw_parts_mut(bits.cast::<u32>(), (SIZE * SIZE) as usize);
-      for y in 0..SIZE {
-         for x in 0..SIZE {
-            let dx = f32::from(i16::try_from(x).unwrap_or(0)) - 15.5;
-            let dy = f32::from(i16::try_from(y).unwrap_or(0)) - 15.5;
-            let dist = dx.hypot(dy);
-            // Outer dark charcoal ring, rich amber sun body, bright gold core.
-            let pixel = if dist <= 5.5 {
-               0xFFFF_F3B0 // warm bright core (BGRA: 0xAARRGGBB in little-endian u32)
-            } else if dist <= 12.5 {
-               0xFFF5_9E0B // Sunbird amber
-            } else if dist <= 14.5 {
-               0xFF1E_1F22 // dark Discord surface border
-            } else {
-               0x0000_0000 // transparent
-            };
-            #[expect(clippy::cast_sign_loss, reason = "x and y are in 0..SIZE")]
-            let index = (y * SIZE + x) as usize;
-            pixels[index] = pixel;
-         }
-      }
-      let mask_bytes = [0u8; (SIZE * SIZE / 8) as usize];
-      let mask = CreateBitmap(SIZE, SIZE, 1, 1, mask_bytes.as_ptr().cast());
+      let pixels = std::slice::from_raw_parts_mut(bits.cast::<u32>(), bgra.len());
+      pixels.copy_from_slice(&bgra);
+
+      // Monochrome bitmap rows are 16-bit word aligned.
+      let mask_stride = ((decoded.width as usize).div_ceil(16)) * 2;
+      let mask_bytes = vec![0_u8; mask_stride * (decoded.height as usize)];
+      let mask = CreateBitmap(width, height, 1, 1, mask_bytes.as_ptr().cast());
       let mut info = IconInfo {
          f_icon:    1,
          x_hotspot: 0,
@@ -373,11 +373,7 @@ unsafe fn create_sunbird_icon() -> *mut c_void {
       if !mask.is_null() {
          DeleteObject(mask);
       }
-      if icon.is_null() {
-         LoadIconW(ptr::null_mut(), IDI_APPLICATION as *const u16)
-      } else {
-         icon
-      }
+      if icon.is_null() { fallback() } else { icon }
    }
 }
 
@@ -417,7 +413,7 @@ unsafe fn add_tray_icon(hwnd: *mut c_void, icon: *mut c_void) -> bool {
    nid.h_icon = icon;
    fill_wide(
       &mut nid.sz_tip,
-      "Sunbird — Click or press Ctrl+Shift+U for Settings",
+      "NyaaCord. Click or press Ctrl+Shift+U for Settings",
    );
    // SAFETY: `hwnd` and `icon` are live Win32 handles on the tray thread.
    unsafe { Shell_NotifyIconW(NIM_ADD, &raw mut nid) != 0 }
@@ -435,7 +431,7 @@ fn start_tray() {
 
 fn run_tray_loop() {
    let class_name = wide("SunbirdTrayWindow");
-   let title = wide("Sunbird");
+   let title = wide("NyaaCord");
    let taskbar_msg_name = wide("TaskbarCreated");
    // SAFETY: Win32 hidden message window, hotkey, and tray registration on
    // dedicated thread.
@@ -612,7 +608,7 @@ unsafe extern "system" fn tray_wnd_proc(
                unsafe {
                   let menu = CreatePopupMenu();
                   if !menu.is_null() {
-                     let open_lbl = wide("Open Sunbird Settings\tCtrl+Shift+U");
+                     let open_lbl = wide("Open NyaaCord Settings\tCtrl+Shift+U");
                      let devtools_lbl = wide("Open DevTools (Console)\tCtrl+Shift+I");
                      let reload_lbl = wide("Reload All Plugins");
                      let update_lbl = wide("Check for Updates");
@@ -746,7 +742,7 @@ fn pick_js_path() -> Option<PathBuf> {
    let filter: Vec<u16> = "JavaScript Plugins (*.js)\0*.js\0All Files (*.*)\0*.*\0\0"
       .encode_utf16()
       .collect();
-   let title = wide("Install Sunbird Plugin (.js)");
+   let title = wide("Install NyaaCord Plugin (.js)");
    let def_ext = wide("js");
    #[expect(
       clippy::cast_possible_truncation,

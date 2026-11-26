@@ -497,7 +497,7 @@ fn open_page<'js>(
    let page_id = NEXT_PAGE.fetch_add(1, Ordering::Relaxed);
    let title = options
       .get::<_, Option<String>>("title")?
-      .unwrap_or_else(|| "Sunbird".to_owned());
+      .unwrap_or_else(|| "NyaaCord".to_owned());
    let sections_js = options.get::<_, Option<Array<'js>>>("sections")?;
 
    let mut sections = Vec::new();
@@ -738,7 +738,7 @@ fn choose_dialog<'js>(
       ));
    }
    let body = message.map(|text| ModalSection::Text { title: None, text });
-   let title = title.unwrap_or_else(|| "Sunbird".to_owned());
+   let title = title.unwrap_or_else(|| "NyaaCord".to_owned());
    in_background(ctx, move || answer(title, body, items))
 }
 
@@ -762,7 +762,7 @@ fn sheet_dialog<'js>(
       monospace,
       highlight,
    };
-   let title = title.unwrap_or_else(|| "Sunbird".to_owned());
+   let title = title.unwrap_or_else(|| "NyaaCord".to_owned());
    in_background(ctx, move || answer(title, Some(body), items))
 }
 

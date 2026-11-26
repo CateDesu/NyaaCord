@@ -29,7 +29,10 @@ use crate::{
       Rows,
       StoreError,
    },
-   update::Update,
+   update::{
+      AppRelease,
+      Update,
+   },
 };
 
 /// Something the user should hear about outside the settings page.
@@ -105,6 +108,17 @@ pub trait Platform: Sync {
    fn toast(&self, message: &str);
 
    fn notify(&self, notice: Notice<'_>);
+
+   /// The installed application version shown to users and compared against
+   /// updates.
+   fn app_version(&self) -> &'static str {
+      crate::update::VERSION
+   }
+
+   /// Checks platform-specific app releases when handled outside `version.json`.
+   fn check_app_update(&self) -> Option<Result<Option<AppRelease>, String>> {
+      None
+   }
 
    /// Whether the site's loader updates this install, so site plugins wait
    /// for it.

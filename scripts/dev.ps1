@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Fast build, patch, install, hot-reload, and live debug CLI for Phoenix Unlock.
+Fast build, patch, install, hot-reload, and live debug CLI for NyaaCord.
 
 .EXAMPLE
 .\scripts\dev.ps1                     # Fast dev-fast Rust build + patch + install + launch

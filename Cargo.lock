@@ -652,6 +652,9 @@ name = "phoenix-inject"
 version = "0.1.0"
 dependencies = [
  "misstep",
+ "phoenix-updater",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -698,6 +701,7 @@ dependencies = [
  "phoenix-runtime",
  "phoenix-sigs",
  "phoenix-ui-desktop",
+ "phoenix-updater",
  "rquickjs",
  "serde",
  "serde_json",
@@ -747,6 +751,18 @@ version = "0.1.0"
 dependencies = [
  "flub",
  "phoenix-wire",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "phoenix-updater"
+version = "0.1.0"
+dependencies = [
+ "flub",
+ "libc",
+ "log",
+ "misstep",
  "serde",
  "serde_json",
 ]

@@ -146,7 +146,7 @@ fn ensure_worker() -> &'static mpsc::Sender<u64> {
                      break;
                   }
                   let mut items = phoenix_runtime::engine()
-                     .map_or_default(|engine| crate::js::ui::render_accessories(&engine, mid));
+                     .map_or_else(Vec::new, |engine| crate::js::ui::render_accessories(&engine, mid));
                   items.sort_by_key(|a| a.priority);
                   let non_empty = !items.is_empty();
                   if let Ok(mut map) = CACHE.write() {

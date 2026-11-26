@@ -8,6 +8,7 @@
 //!
 //! Each OS implements [`DesktopHost`]; everything above it is shared here.
 
+mod icon;
 #[cfg(target_os = "linux")] mod linux;
 #[cfg(windows)] mod webview;
 #[cfg(windows)] mod windows;
@@ -28,6 +29,12 @@ use std::{
 /// Self-contained HTML/JS/CSS companion dashboard for Desktop settings,
 /// plugin management, catalog installs, OTA updates, and JS console.
 pub const DASHBOARD_HTML: &str = include_str!("dashboard.html");
+
+/// Animated fox icon baked into the desktop bundle for the companion dashboard.
+pub const ICON_GIF: &[u8] = include_bytes!("../../../web/plugins/nyaacord.gif");
+
+/// Static fox icon baked into the desktop bundle for native tray icons.
+pub const ICON_PNG: &[u8] = include_bytes!("../../../web/plugins/nyaacord.png");
 
 #[derive(Debug, flub::Error)]
 pub enum Error {
@@ -89,7 +96,7 @@ impl TrayAction {
    )]
    const fn label(self) -> &'static str {
       match self {
-         Self::OpenSettings => "Open Sunbird Settings",
+         Self::OpenSettings => "Open NyaaCord Settings",
          Self::OpenDevtools => "Open DevTools (Console)",
          Self::ReloadAll => "Reload All Plugins",
          Self::CheckUpdates => "Check for Updates",
@@ -121,7 +128,7 @@ impl TrayAction {
          },
          Self::CopyUrl => {
             if copy(&config.dashboard_url).is_ok() {
-               Os::notify("Sunbird", &format!("Copied {}", config.dashboard_url));
+               Os::notify("NyaaCord", &format!("Copied {}", config.dashboard_url));
             }
          },
          Self::OpenPlugins => {
@@ -182,7 +189,7 @@ pub fn start_tray(config: TrayConfig) {
    Os::start_tray();
 }
 
-/// Opens the Sunbird Settings dashboard in a standalone chromeless app window
+/// Opens the `NyaaCord` settings dashboard in a standalone chromeless app window
 /// (a Chromium `--app` window when available, else the system browser).
 pub fn open_settings() {
    if let Some(config) = config() {
@@ -190,7 +197,7 @@ pub fn open_settings() {
    }
 }
 
-/// Opens the Sunbird `DevTools` / Runtime Console directly in a standalone
+/// Opens the `NyaaCord` `DevTools` / Runtime Console directly in a standalone
 /// window (`Ctrl+Shift+I` while Discord Phoenix is focused).
 pub fn open_devtools() {
    if let Some(config) = config() {
@@ -264,7 +271,7 @@ pub fn open_url(url: &str) -> Result<(), Error> {
 /// Shows a short desktop toast / notification message.
 pub fn toast(message: &str) {
    log::info!("[toast] {message}");
-   Os::notify("Sunbird", message);
+   Os::notify("NyaaCord", message);
 }
 
 /// Shows a titled desktop notification.
@@ -276,7 +283,7 @@ pub fn notify(title: &str, body: Option<&str>) {
       },
       _ => {
          log::info!("[notify] {title}");
-         Os::notify("Sunbird", title);
+         Os::notify("NyaaCord", title);
       },
    }
 }
@@ -303,8 +310,10 @@ mod tests {
 
    #[test]
    fn dashboard_html_is_embedded() {
-      assert!(DASHBOARD_HTML.contains("<title>Sunbird"));
+      assert!(DASHBOARD_HTML.contains("<title>NyaaCord Settings</title>"));
       assert!(DASHBOARD_HTML.contains("/plugins"));
       assert!(DASHBOARD_HTML.contains("/catalog"));
+      assert!(DASHBOARD_HTML.contains("/icon.gif"));
+      assert!(ICON_GIF.starts_with(b"GIF89a"));
    }
 }

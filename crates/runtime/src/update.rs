@@ -1,6 +1,6 @@
-//! Tells the user when the site ships a newer Phoenix Unlock: a newer loader,
-//! or plugin bundles that differ from the installed ones. The site publishes
-//! both in `version.json` (`web/tools/bundle-plugins.ts`).
+//! Tells the user when the site ships a newer loader or plugin bundles that
+//! differ from the installed ones. The site publishes both in `version.json`
+//! (`web/tools/bundle-plugins.ts`).
 //!
 //! Plugin updates download each changed `plugins/<name>.js`, verify its CRC-32
 //! against `version.json` and hot-reload it. A loader update is the platform's
@@ -9,12 +9,8 @@
 use std::{
    collections::BTreeMap,
    sync::{
-      Mutex,
-      PoisonError,
-      atomic::{
-         AtomicBool,
-         Ordering,
-      },
+      Mutex, PoisonError,
+      atomic::{AtomicBool, Ordering},
    },
    thread,
 };
@@ -22,6 +18,8 @@ use std::{
 use crate::Notice;
 /// This build's version, `<UTC commit date>-<short hash>` (`build.rs`).
 pub const VERSION: &str = env!("PHOENIX_VERSION");
+/// This application build's release version (`NYAACORD_VERSION` in `build.rs`).
+pub const APP_VERSION: &str = env!("NYAACORD_VERSION");
 pub const SITE: &str = "https://sunbird.tools/";
 pub const ASSETS: &str = "https://assets.sunbird.tools/";
 
@@ -31,28 +29,42 @@ static MARKER: &str = concat!("phoenix-version:", env!("PHOENIX_VERSION"), ";");
 
 #[derive(serde::Deserialize)]
 struct Site {
-   loader:  String,
+   loader: String,
    plugins: BTreeMap<String, u32>,
 }
 
-/// What the site has that this install lacks.
+/// Whole-package release metadata provided by a platform updater.
+#[derive(Clone, Debug)]
+pub struct AppRelease {
+   pub version:      String,
+   pub tag_name:     String,
+   pub asset_name:   String,
+   pub download_url: String,
+   pub size:         u64,
+   pub sha256:       String,
+   pub release_url:  String,
+}
+
+/// What the site or release channel has that this install lacks.
 #[derive(Clone)]
 pub struct Update {
-   /// The site's version, when it is newer than [`VERSION`].
+   /// The newer build or release version.
    pub loader:      Option<String>,
    /// Installed plugins whose code differs from the site's.
    pub plugins:     Vec<String>,
    /// Expected CRC-32 for each plugin in [`Self::plugins`].
    pub plugin_crcs: BTreeMap<String, u32>,
+   /// Full app release metadata when checked via [`crate::Platform::check_app_update`].
+   pub release:     Option<AppRelease>,
 }
 
 /// A plugin the site offers, as `plugins/index.json` lists it.
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 pub struct Listed {
-   pub name:        String,
+   pub name: String,
    pub description: String,
    #[serde(default)]
-   pub warning:     Option<String>,
+   pub warning: Option<String>,
 }
 
 /// The site's plugin list, fetched when the install page first opens.
@@ -69,6 +81,18 @@ static FOUND: Mutex<Option<Update>> = Mutex::new(None);
 static STATUS: Mutex<Option<String>> = Mutex::new(None);
 static BUSY: AtomicBool = AtomicBool::new(false);
 
+/// The installed version reported by the active platform.
+#[must_use]
+pub fn app_version() -> &'static str {
+   crate::platform().map_or(VERSION, <dyn crate::Platform>::app_version)
+}
+
+/// Clears the cached pending update and redraws settings.
+pub fn clear_found() {
+   *FOUND.lock().unwrap_or_else(PoisonError::into_inner) = None;
+   crate::refresh_settings();
+}
+
 /// The update the last check found, if any.
 pub fn found() -> Option<Update> {
    FOUND.lock().unwrap_or_else(PoisonError::into_inner).clone()
@@ -84,7 +108,17 @@ pub fn status() -> Option<String> {
 
 /// Whether an update download/install is currently running.
 pub fn busy() -> bool {
-   BUSY.load(Ordering::Relaxed)
+   BUSY.load(Ordering::Acquire)
+}
+
+struct BusyGuard;
+
+impl Drop for BusyGuard {
+   fn drop(&mut self) {
+      if BUSY.swap(false, Ordering::AcqRel) {
+         crate::refresh_settings();
+      }
+   }
 }
 
 pub fn set_status(message: Option<String>) {
@@ -131,36 +165,55 @@ pub fn fetch_catalog() {
 /// current.
 pub fn install_listed(name: &str) -> Result<String, crate::Error> {
    let updates_loader = crate::platform().is_some_and(<dyn crate::Platform>::updates_loader);
-   if updates_loader && let Some(version) = found().and_then(|update| update.loader) {
+   if updates_loader
+      && let Some(update) = found()
+      && update.release.is_none()
+      && let Some(version) = update.loader
+   {
       return Err(crate::Error::LoaderOutdated { version });
    }
    crate::install(&format!("{ASSETS}plugins/{name}.js"))
 }
 
-/// Asks the site what this install lacks, and remembers it for [`found`].
-/// `None` means up to date.
+/// Asks the platform or site what this install lacks, and remembers it for
+/// [`found`]. `None` means up to date.
 fn query() -> Result<Option<Update>, String> {
-   let body = crate::fetch::get(&format!("{ASSETS}version.json")).map_err(|err| err.to_string())?;
-   let site =
-      serde_json::from_slice::<Site>(&body).map_err(|err| format!("version.json: {err}"))?;
-   let loader = (site.loader.as_str() > VERSION).then_some(site.loader);
-   // Plugins come along with a loader update, so one tap brings both.
-   let mut plugins = Vec::new();
-   let mut plugin_crcs = BTreeMap::new();
-   for plugin in crate::plugins() {
-      if let Some(&crc) = site.plugins.get(&plugin.name)
-         && crate::source(&plugin.name)
-            .is_some_and(|source| crc32fast::hash(source.as_bytes()) != crc)
-      {
-         plugin_crcs.insert(plugin.name.clone(), crc);
-         plugins.push(plugin.name);
+   let update = if let Some(res) =
+      crate::platform().and_then(<dyn crate::Platform>::check_app_update)
+   {
+      res?.map(|rel| {
+         Update {
+            loader:      Some(rel.version.clone()),
+            plugins:     Vec::new(),
+            plugin_crcs: BTreeMap::new(),
+            release:     Some(rel),
+         }
+      })
+   } else {
+      let body =
+         crate::fetch::get(&format!("{ASSETS}version.json")).map_err(|err| err.to_string())?;
+      let site =
+         serde_json::from_slice::<Site>(&body).map_err(|err| format!("version.json: {err}"))?;
+      let loader = (site.loader.as_str() > VERSION).then_some(site.loader);
+      // Plugins come along with a loader update, so one tap brings both.
+      let mut plugins = Vec::new();
+      let mut plugin_crcs = BTreeMap::new();
+      for plugin in crate::plugins() {
+         if let Some(&crc) = site.plugins.get(&plugin.name)
+            && crate::source(&plugin.name)
+               .is_some_and(|source| crc32fast::hash(source.as_bytes()) != crc)
+         {
+            plugin_crcs.insert(plugin.name.clone(), crc);
+            plugins.push(plugin.name);
+         }
       }
-   }
-   let update = (loader.is_some() || !plugins.is_empty()).then_some(Update {
-      loader,
-      plugins,
-      plugin_crcs,
-   });
+      (loader.is_some() || !plugins.is_empty()).then_some(Update {
+         loader,
+         plugins,
+         plugin_crcs,
+         release: None,
+      })
+   };
    FOUND
       .lock()
       .unwrap_or_else(PoisonError::into_inner)
@@ -171,11 +224,17 @@ fn query() -> Result<Option<Update>, String> {
 
 /// Asks the site in the background. Failures (offline) are only logged.
 pub fn check() {
+   if !begin() {
+      log::info!("update check: already running");
+      return;
+   }
    thread::spawn(|| {
+      let guard = BusyGuard;
       let update = match query() {
          Ok(Some(update)) => update,
          Ok(None) => {
-            log::info!("up to date ({VERSION})");
+            let cur = app_version();
+            log::info!("up to date ({cur})");
             return;
          },
          Err(err) => {
@@ -188,6 +247,7 @@ pub fn check() {
          update.loader,
          update.plugins
       );
+      drop(guard);
       if let Some(platform) = crate::platform() {
          platform.notify(Notice::UpdateAvailable(&update));
       }
@@ -204,6 +264,7 @@ pub fn check_now() {
    }
    set_status(Some("Checking for updates...".to_owned()));
    thread::spawn(|| {
+      let _guard = BusyGuard;
       match query() {
          Ok(Some(update)) => {
             log::info!(
@@ -217,9 +278,10 @@ pub fn check_now() {
             }
          },
          Ok(None) => {
-            log::info!("up to date ({VERSION})");
-            finish(Some(format!("Sunbird {VERSION} is up to date.")));
-            crate::toast("Sunbird is up to date");
+            let cur = app_version();
+            log::info!("up to date ({cur})");
+            finish(Some(format!("NyaaCord v{cur} is up to date.")));
+            crate::toast("NyaaCord is up to date");
          },
          Err(err) => {
             log::info!("update check: {err}");
@@ -231,29 +293,43 @@ pub fn check_now() {
    });
 }
 
-/// Checks the site again and applies what this install lacks.
+/// Checks for updates again and applies what this install lacks.
 ///
-/// Updates changed plugins over-the-air first (hot-reloading them live), then
-/// runs the in-app APK self-updater if a newer loader is available.
+/// When a loader or package update is available and the platform supports
+/// [`crate::Platform::updates_loader`], hands off to
+/// [`crate::Platform::update_loader`], which must call [`finish`] on every exit
+/// path so the busy slot is released.
 pub fn apply() {
-   if BUSY.swap(true, Ordering::AcqRel) {
+   if !begin() {
       log::info!("update apply: already running");
       crate::toast("Update already in progress...");
       return;
    }
+   set_status(Some("Checking for updates...".to_owned()));
    thread::spawn(|| {
-      // The last check ran when Discord started, and the site may have shipped
+      let _guard = BusyGuard;
+      // The last check ran when Discord started, and a release may have shipped
       // since, so what it found can be out of date by the time this runs.
-      let update = query().unwrap_or_else(|err| {
-         log::info!("update apply: {err}, using the last check");
-         found()
-      });
+      let update = match query() {
+         Ok(update) => update,
+         Err(err) => {
+            if let Some(cached) = found() {
+               log::info!("update apply: {err}, using the last check");
+               Some(cached)
+            } else {
+               log::info!("update apply: {err}");
+               let msg = format!("Update check failed: {err}");
+               finish(Some(msg.clone()));
+               crate::toast(&msg);
+               return;
+            }
+         },
+      };
       let Some(update) = update else {
-         log::info!("update apply: up to date ({VERSION})");
-         // `finish` also clears the last status line and redraws the page;
-         // releasing only the slot left "Updating..." on screen for good.
-         finish(None);
-         crate::toast("Sunbird is up to date");
+         let cur = app_version();
+         log::info!("update apply: up to date ({cur})");
+         finish(Some(format!("NyaaCord v{cur} is up to date.")));
+         crate::toast("NyaaCord is up to date");
          return;
       };
       // The site's plugins are built against its loader and can call API this
@@ -266,7 +342,11 @@ pub fn apply() {
             return;
          }
          if update.plugins.is_empty() {
-            let msg = format!("Sunbird {version} is available — restart Sunbird to update.");
+            let msg = if update.release.is_some() {
+               format!("NyaaCord v{version} is available.")
+            } else {
+               format!("Upstream build {version} is available.")
+            };
             finish(Some(msg.clone()));
             crate::toast(&msg);
             return;
@@ -313,13 +393,12 @@ pub fn apply() {
       // A failed plugin used to go unreported whenever the loader update below
       // still had to run, since only `update.loader.is_none()` printed it.
       // The slot is released either way, and the failure keeps its line.
-      BUSY.store(false, Ordering::Release);
       if failed.is_empty() {
-         set_status(None);
+         finish(None);
       } else {
          let msg = format!("Plugin update failed: {}", failed.join("; "));
          log::error!("{msg}");
-         set_status(Some(msg.clone()));
+         finish(Some(msg.clone()));
          crate::toast(&msg);
       }
       if !updated_plugins.is_empty()
@@ -356,7 +435,28 @@ pub fn begin() -> bool {
 }
 
 /// Releases the update slot with `status` shown.
+///
+/// Writes `STATUS` before releasing `BUSY` so any reader observing `busy() == false`
+/// sees the final status line immediately.
 pub fn finish(status: Option<String>) {
+   *STATUS.lock().unwrap_or_else(PoisonError::into_inner) = status;
    BUSY.store(false, Ordering::Release);
-   set_status(status);
+   crate::refresh_settings();
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   #[test]
+   fn finish_publishes_status_before_releasing_busy() {
+      assert!(begin());
+      assert!(busy());
+      assert!(!begin());
+      finish(Some("done".to_owned()));
+      assert!(!busy());
+      assert_eq!(status().as_deref(), Some("done"));
+      finish(None);
+      assert_eq!(status(), None);
+   }
 }

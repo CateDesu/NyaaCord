@@ -76,6 +76,10 @@ impl SharedString {
          return Self::from_static(intern(s));
       }
       // SAFETY: `inner` holds `16 + s.len()` bytes, aligned to 8.
+      #[expect(
+         clippy::cast_ptr_alignment,
+         reason = "alloc_or_oom requested 8-byte alignment"
+      )]
       unsafe {
          inner.cast::<[usize; 2]>().write([1, 1]);
          ptr::copy_nonoverlapping(s.as_ptr(), inner.add(16), s.len());
@@ -476,12 +480,12 @@ unsafe extern "C" fn button_callback(
                };
                match phoenix_runtime::install_file(&file_name, bytes) {
                   Ok(installed) => {
-                     log::info!("sunbird settings: installed {installed} from {file_name}");
+                     log::info!("nyaacord settings: installed {installed} from {file_name}");
                      phoenix_ui_desktop::toast(&format!("Installed {installed}"));
                      crate::modal::force_redraw();
                   },
                   Err(err) => {
-                     log::warn!("sunbird settings: install file {file_name}: {err}");
+                     log::warn!("nyaacord settings: install file {file_name}: {err}");
                      phoenix_ui_desktop::toast(&format!("Install failed: {err}"));
                   },
                }
@@ -489,7 +493,7 @@ unsafe extern "C" fn button_callback(
          },
          Action::UninstallPlugin(name) => {
             if let Err(err) = phoenix_runtime::uninstall(&name) {
-               log::warn!("sunbird settings: uninstall {name}: {err}");
+               log::warn!("nyaacord settings: uninstall {name}: {err}");
             }
          },
          Action::PressButton { plugin, key } => phoenix_runtime::press(&plugin, &key),
@@ -497,11 +501,11 @@ unsafe extern "C" fn button_callback(
             std::thread::spawn(move || {
                match update::install_listed(&name) {
                   Ok(installed) => {
-                     log::info!("sunbird settings: installed {installed}");
+                     log::info!("nyaacord settings: installed {installed}");
                      phoenix_ui_desktop::toast(&format!("Installed {installed}"));
                   },
                   Err(err) => {
-                     log::warn!("sunbird settings: install {name}: {err}");
+                     log::warn!("nyaacord settings: install {name}: {err}");
                      phoenix_ui_desktop::toast(&format!("Install failed: {err}"));
                   },
                }
@@ -1187,7 +1191,7 @@ pub fn wrap_with_accessories(
 }
 
 // ---------------------------------------------------------------------------
-// Sunbird Categorized Native GPUI Settings Page
+// NyaaCord settings page
 // ---------------------------------------------------------------------------
 
 const DESKTOP_FULL: &[&str] = &[
@@ -1254,7 +1258,7 @@ impl DesktopCompat {
    }
 }
 
-/// Renders the categorized native Sunbird Settings page into `sret`.
+/// Renders the categorized native `NyaaCord` settings page into `sret`.
 pub fn render_sunbird_page(sret: *mut RawAnyElement) -> bool {
    let Some(sym) = SYMBOLS.get() else {
       return false;
@@ -1288,10 +1292,10 @@ pub fn render_sunbird_page(sret: *mut RawAnyElement) -> bool {
    // 1. Header + Category Tab Bar
    let summary = format!(
       "v{} · {enabled_count}/{} plugins active · Ctrl+Shift+I for DevTools",
-      update::VERSION,
+      update::app_version(),
       plugins.len()
    );
-   root = b.push_div(root, b.text_block("Sunbird", &summary));
+   root = b.push_div(root, b.text_block("NyaaCord", &summary));
 
    let variant_for = |t: Tab| {
       if tab == t {
@@ -1949,65 +1953,214 @@ fn render_general_tab(b: &Builder, mut root: RawDiv) -> RawDiv {
    root = b.push_div(root, dev_card);
 
    // Card 2: Updates
-   let (upd_desc, upd_btn, upd_var, upd_act) = updates_card_state();
-
    let mut upd_card = b.card(10.0, 16.0, 8.0, 0.20);
-   upd_card = b.push_div(
-      upd_card,
-      b.action_row(
-         "sunbird-updates",
-         "Sunbird Updates",
-         &upd_desc,
-         upd_btn,
-         upd_var,
-         BtnSize::Medium,
-         upd_act,
-      ),
-   );
+   for (idx, row) in updates_card_state().into_iter().enumerate() {
+      if idx > 0 {
+         upd_card = b.push_div(upd_card, b.divider());
+      }
+      upd_card = b.push_div(
+         upd_card,
+         b.action_row(
+            row.id,
+            row.title,
+            &row.subtitle,
+            &row.button,
+            row.variant,
+            BtnSize::Medium,
+            row.action,
+         ),
+      );
+   }
    b.push_div(root, upd_card)
 }
 
-fn updates_card_state() -> (String, &'static str, BtnVariant, Action) {
+struct UpdateCardRow {
+   id:       &'static str,
+   title:    &'static str,
+   subtitle: String,
+   button:   String,
+   variant:  BtnVariant,
+   action:   Action,
+}
+
+fn updates_card_state() -> Vec<UpdateCardRow> {
+   let can_update =
+      phoenix_runtime::platform().is_some_and(<dyn phoenix_runtime::Platform>::updates_loader);
+   let busy = update::busy();
    let status = update::status();
-   if update::busy() {
-      return (
-         status.unwrap_or_else(|| "Checking for updates...".to_owned()),
-         "Working...",
-         BtnVariant::Secondary,
-         Action::CheckUpdates,
-      );
+   let found = update::found();
+   build_updates_card_rows(
+      update::app_version(),
+      busy,
+      can_update,
+      status,
+      found.as_ref(),
+   )
+}
+
+fn build_updates_card_rows(
+   current_version: &str,
+   busy: bool,
+   can_update: bool,
+   status: Option<String>,
+   found: Option<&update::Update>,
+) -> Vec<UpdateCardRow> {
+   let cur = current_version.trim_start_matches(['v', 'V']);
+   if busy {
+      return vec![UpdateCardRow {
+         id:       "sunbird-updates",
+         title:    "NyaaCord Updates",
+         subtitle: status.unwrap_or_else(|| "Checking for updates...".to_owned()),
+         button:   "Working...".to_owned(),
+         variant:  BtnVariant::Secondary,
+         action:   Action::CheckUpdates,
+      }];
    }
-   if let Some(found) = update::found() {
+   if let Some(found) = found {
+      if let Some(raw_version) = &found.loader
+         && can_update
+      {
+         let version = raw_version.trim_start_matches(['v', 'V']);
+         let subtitle = if found.plugins.is_empty() {
+            format!(
+               "NyaaCord v{version} is available. Replaces the AppImage and preserves settings \
+                and plugins."
+            )
+         } else {
+            format!(
+               "NyaaCord v{version} and plugin updates ({}) are available. Replaces the AppImage \
+                and preserves settings and plugins.",
+               found.plugins.join(", ")
+            )
+         };
+         return vec![
+            UpdateCardRow {
+               id:       "sunbird-updates-apply",
+               title:    "NyaaCord Updates",
+               subtitle,
+               button:   format!("Update to v{version}"),
+               variant:  BtnVariant::Primary,
+               action:   Action::ApplyUpdates,
+            },
+            UpdateCardRow {
+               id:       "sunbird-updates",
+               title:    "Check for Updates",
+               subtitle: status.unwrap_or_else(|| format!("Installed version: v{cur}")),
+               button:   "Check for Updates".to_owned(),
+               variant:  BtnVariant::Secondary,
+               action:   Action::CheckUpdates,
+            },
+         ];
+      }
       if !found.plugins.is_empty() {
-         let desc = match &found.loader {
-            Some(version) => {
+         let subtitle = found.loader.as_ref().map_or_else(
+            || format!("Plugin updates ready: {}", found.plugins.join(", ")),
+            |raw_version| {
+               let version = raw_version.trim_start_matches(['v', 'V']);
                format!(
-                  "Plugin updates ready: {} · Sunbird {version} available (restart to update)",
+                  "Plugin updates ready: {} · NyaaCord v{version} available",
                   found.plugins.join(", ")
                )
             },
-            None => format!("Plugin updates ready: {}", found.plugins.join(", ")),
-         };
-         return (
-            desc,
-            "Apply Updates",
-            BtnVariant::Primary,
-            Action::ApplyUpdates,
          );
+         return vec![
+            UpdateCardRow {
+               id:       "sunbird-updates-apply",
+               title:    "NyaaCord Updates",
+               subtitle,
+               button:   "Apply Updates".to_owned(),
+               variant:  BtnVariant::Primary,
+               action:   Action::ApplyUpdates,
+            },
+            UpdateCardRow {
+               id:       "sunbird-updates",
+               title:    "Check for Updates",
+               subtitle: status.unwrap_or_else(|| format!("Installed version: v{cur}")),
+               button:   "Check for Updates".to_owned(),
+               variant:  BtnVariant::Secondary,
+               action:   Action::CheckUpdates,
+            },
+         ];
       }
-      if let Some(version) = found.loader {
-         return (
-            format!("Sunbird {version} is available — restart Sunbird to update."),
-            "Check for Updates",
-            BtnVariant::Secondary,
-            Action::CheckUpdates,
-         );
+      if let Some(raw_version) = &found.loader {
+         let version = raw_version.trim_start_matches(['v', 'V']);
+         return vec![UpdateCardRow {
+            id:       "sunbird-updates",
+            title:    "NyaaCord Updates",
+            subtitle: status.unwrap_or_else(|| format!("NyaaCord v{version} is available.")),
+            button:   "Check for Updates".to_owned(),
+            variant:  BtnVariant::Secondary,
+            action:   Action::CheckUpdates,
+         }];
       }
    }
-   (
-      status.unwrap_or_else(|| format!("Sunbird {} is up to date.", update::VERSION)),
-      "Check for Updates",
-      BtnVariant::Secondary,
-      Action::CheckUpdates,
-   )
+   vec![UpdateCardRow {
+      id:       "sunbird-updates",
+      title:    "NyaaCord Updates",
+      subtitle: status.unwrap_or_else(|| format!("NyaaCord v{cur} is up to date.")),
+      button:   "Check for Updates".to_owned(),
+      variant:  BtnVariant::Secondary,
+      action:   Action::CheckUpdates,
+   }]
+}
+
+#[cfg(test)]
+mod tests {
+   use std::collections::BTreeMap;
+
+   use super::*;
+
+   #[test]
+   fn updates_card_renders_busy_available_and_up_to_date_states() {
+      let busy = build_updates_card_rows(
+         "0.1.0",
+         true,
+         true,
+         Some("Downloading NyaaCord v0.2.0 (45%)...".to_owned()),
+         None,
+      );
+      assert_eq!(busy.len(), 1);
+      assert_eq!(busy[0].button, "Working...");
+      assert!(busy[0].subtitle.contains("45%"));
+
+      let release_update = update::Update {
+         loader:      Some("0.2.0".to_owned()),
+         plugins:     Vec::new(),
+         plugin_crcs: BTreeMap::new(),
+         release:     Some(update::AppRelease {
+            version:      "0.2.0".to_owned(),
+            tag_name:     "v0.2.0".to_owned(),
+            asset_name:   "NyaaCord-x86_64.AppImage".to_owned(),
+            download_url: "https://example.com/NyaaCord-x86_64.AppImage".to_owned(),
+            size:         1024,
+            sha256:       "a".repeat(64),
+            release_url:  "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0".to_owned(),
+         }),
+      };
+      let available = build_updates_card_rows(
+         "0.1.0",
+         false,
+         true,
+         Some("Update failed: /opt/NyaaCord.AppImage: target directory is not writable".to_owned()),
+         Some(&release_update),
+      );
+      assert_eq!(available.len(), 2);
+      assert_ne!(available[0].id, available[1].id);
+      assert_eq!(available[0].button, "Update to v0.2.0");
+      assert!(matches!(available[0].action, Action::ApplyUpdates));
+      assert_eq!(available[1].button, "Check for Updates");
+      assert!(available[1].subtitle.contains("not writable"));
+      assert!(matches!(available[1].action, Action::CheckUpdates));
+
+      let read_only =
+         build_updates_card_rows("0.1.0", false, false, None, Some(&release_update));
+      assert_eq!(read_only.len(), 1);
+      assert_eq!(read_only[0].button, "Check for Updates");
+      assert!(read_only[0].subtitle.contains("0.2.0"));
+
+      let current = build_updates_card_rows("0.1.0", false, true, None, None);
+      assert_eq!(current.len(), 1);
+      assert_eq!(current[0].button, "Check for Updates");
+      assert_eq!(current[0].subtitle, "NyaaCord v0.1.0 is up to date.");
+   }
 }

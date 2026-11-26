@@ -83,7 +83,7 @@ pub enum Error {
    NotUtf8 { url: String },
    #[error(transparent)]
    Fetch(#[from] fetch::FetchError),
-   #[error("update Phoenix Unlock to {version} first, the site's plugins need it")]
+   #[error("NyaaCord needs runtime version {version}, the site's plugins need it")]
    LoaderOutdated { version: String },
 }
 
@@ -272,7 +272,7 @@ pub fn toast(message: &str) {
 /// Every plugin found at start, enabled or not.
 #[must_use]
 pub fn plugins() -> Vec<PluginInfo> {
-   engine().map_or_default(|engine| engine.plugins())
+   engine().map_or_else(Vec::new, |engine| engine.plugins())
 }
 
 /// Whether the staff unlock is on.

@@ -1,0 +1,23 @@
+[package]
+name = "phoenix-updater"
+description = "GitHub Releases AppImage updater for NyaaCord"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "nyaacord-updater"
+path = "src/bin/nyaacord-updater.rs"
+
+[dependencies]
+flub       = { workspace = true }
+log        = { workspace = true }
+misstep    = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[lints]
+workspace = true

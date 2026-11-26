@@ -39,6 +39,7 @@ use crate::{
          section,
       },
       settings,
+      tree::text,
    },
 };
 
@@ -148,7 +149,8 @@ fn text_of(payload: &Value) -> Option<String> {
 
 impl Settings {
    fn entry_ops(&mut self) -> (Entry, Vec<Op>) {
-      let row = button_row(TITLE, ICON_PLUGIN, Some(Press::OpenMain), true);
+      let mut row = button_row(TITLE, ICON_PLUGIN, Some(Press::OpenMain), true);
+      row.set(Prop::ACCESSIBILITY_ID, Some(text("phoenix-Sunbird")));
       let mut section = section("", vec![row]);
       let mut ops = Vec::new();
       let root = self.build(&mut section, None, &mut ops);
