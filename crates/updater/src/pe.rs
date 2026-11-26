@@ -15,10 +15,13 @@ use crate::{
    github::{Config, ReleaseInfo},
    http,
 };
-use crate::{Error, sha256};
+use crate::{Error, sha256, version};
+
+/// Advisory lock filename shared between the launcher and updater in an install directory.
+pub const INSTALL_LOCK_FILE: &str = ".client-sync.lock";
 
 #[cfg(windows)]
-pub const MAX_EXE_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_EXE_BYTES: u64 = 1024 * 1024 * 1024;
 const DOS_HEADER_LEN: usize = 64;
 const PE_MIN_HEADER_LEN: usize = 26;
 const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
@@ -26,6 +29,92 @@ const IMAGE_FILE_DLL: u16 = 0x2000;
 const PE32_PLUS_MAGIC: u16 = 0x020B;
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Advisory exclusive file lock serializing installs, updates, and rollbacks in one directory.
+pub struct UpdateLock {
+   file: File,
+}
+
+impl UpdateLock {
+   /// Creates or opens `.client-sync.lock` in `dir` and acquires an exclusive lock.
+   pub fn acquire(dir: &Path) -> Result<Self, Error> {
+      let path = dir.join(INSTALL_LOCK_FILE);
+      let file = OpenOptions::new()
+         .read(true)
+         .write(true)
+         .create(true)
+         .truncate(false)
+         .open(&path)
+         .map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+         })?;
+      file.lock().map_err(|source| Error::Io { path, source })?;
+      Ok(Self { file })
+   }
+}
+
+impl Drop for UpdateLock {
+   fn drop(&mut self) {
+      let _ = self.file.unlock();
+   }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallUpdateDecision {
+   Apply,
+   AlreadyCurrent,
+   UnknownInstalled,
+}
+
+/// Decides whether `target_release_ver` should replace an installed launcher reporting `installed_ver`.
+#[must_use]
+pub fn check_installed_for_release(
+   installed_ver: Option<&str>,
+   target_release_ver: &str,
+) -> InstallUpdateDecision {
+   let Some(inst_raw) = installed_ver.filter(|val| !val.trim().is_empty()) else {
+      return InstallUpdateDecision::UnknownInstalled;
+   };
+   let Some(installed) = version::Version::parse(&version::normalize(inst_raw)) else {
+      return InstallUpdateDecision::UnknownInstalled;
+   };
+   if let Some(target) = version::Version::parse(&version::normalize(target_release_ver))
+      && installed >= target
+   {
+      return InstallUpdateDecision::AlreadyCurrent;
+   }
+   InstallUpdateDecision::Apply
+}
+
+/// Queries `exe --version` without triggering auto-update or flashing a console window.
+#[cfg(windows)]
+#[must_use]
+pub fn query_exe_version(exe: &Path) -> Option<String> {
+   use std::{
+      os::windows::process::CommandExt as _,
+      process::{Command, Stdio},
+   };
+
+   const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+   let out = Command::new(exe)
+      .arg("--version")
+      .env("NYAACORD_AUTO_UPDATE", "0")
+      .stdin(Stdio::null())
+      .stdout(Stdio::piped())
+      .stderr(Stdio::null())
+      .creation_flags(CREATE_NO_WINDOW)
+      .output()
+      .ok()?;
+   if !out.status.success() {
+      return None;
+   }
+   let text = String::from_utf8(out.stdout).ok()?;
+   let line = text.lines().next()?.trim();
+   let ver = line.strip_prefix("NyaaCord ")?.trim();
+   (!ver.is_empty()).then(|| version::normalize(ver))
+}
 
 struct TempFileGuard {
    path: PathBuf,
@@ -381,8 +470,8 @@ pub(crate) fn replace_exe_with_backup(
    Ok(Some(prev))
 }
 
-/// Restores `target` from `<target>.previous` while keeping `.previous` intact.
-pub fn rollback_exe(target: &Path) -> Result<PathBuf, Error> {
+/// Restores `target` from `<target>.previous` while the caller already holds `UpdateLock`.
+pub fn rollback_exe_locked(_lock: &UpdateLock, target: &Path) -> Result<PathBuf, Error> {
    let target = absolutize(target)?;
    let prev = previous_path(&target);
    if !prev.exists() {
@@ -436,6 +525,14 @@ pub fn rollback_exe(target: &Path) -> Result<PathBuf, Error> {
    Ok(prev)
 }
 
+/// Acquires `UpdateLock` and restores `target` from `<target>.previous` while keeping `.previous` intact.
+pub fn rollback_exe(target: &Path) -> Result<PathBuf, Error> {
+   let target = absolutize(target)?;
+   let (parent, _) = target_parent_and_name(&target)?;
+   let lock = UpdateLock::acquire(&parent)?;
+   rollback_exe_locked(&lock, &target)
+}
+
 #[cfg(windows)]
 fn resolve_target_path(target: &Path) -> Result<PathBuf, Error> {
    let abs = absolutize(target)?;
@@ -470,9 +567,11 @@ fn resolve_target_path(target: &Path) -> Result<PathBuf, Error> {
    }
 }
 
-/// Downloads, verifies, backs up, and atomically replaces a Windows `.exe`.
+/// Downloads, verifies, backs up, and atomically replaces a Windows `.exe` while
+/// the caller already holds `UpdateLock` for `target`'s parent directory.
 #[cfg(windows)]
-pub fn apply_update(
+pub fn apply_update_locked(
+   _lock: &UpdateLock,
    release: &ReleaseInfo,
    target: &Path,
    config: &Config,
@@ -532,6 +631,47 @@ pub fn apply_update(
       previous,
       version: release.version.clone(),
    })
+}
+
+/// Acquires `UpdateLock`, checks the live installed launcher version, and applies a Windows `.exe` update.
+#[cfg(windows)]
+pub fn apply_update(
+   release: &ReleaseInfo,
+   target: &Path,
+   config: &Config,
+   on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<ApplyOutcome, Error> {
+   let target = resolve_target_path(target)?;
+   let (parent, _) = target_parent_and_name(&target)?;
+   if !parent.exists() {
+      fs::create_dir_all(&parent).map_err(|source| Error::NotWritable {
+         path: target.clone(),
+         source,
+      })?;
+   }
+   let lock = UpdateLock::acquire(&parent)?;
+   if target.is_file() {
+      let live_ver = query_exe_version(&target);
+      match check_installed_for_release(live_ver.as_deref(), &release.version) {
+         InstallUpdateDecision::AlreadyCurrent => {
+            return Ok(ApplyOutcome {
+               target,
+               previous: None,
+               version: live_ver.unwrap_or_else(|| release.version.clone()),
+            });
+         },
+         InstallUpdateDecision::UnknownInstalled => {
+            return Err(Error::InvalidExecutable {
+               path: target,
+               reason:
+                  "could not verify version of installed launcher; run --update --force to replace"
+                     .to_owned(),
+            });
+         },
+         InstallUpdateDecision::Apply => {},
+      }
+   }
+   apply_update_locked(&lock, release, &target, config, on_progress)
 }
 
 #[cfg(test)]
@@ -648,6 +788,76 @@ mod tests {
       assert_eq!(fs::read(&target).expect("read rolled back"), v1);
       assert!(previous_path(&target).exists());
 
+      let _ = fs::remove_dir_all(&dir);
+   }
+
+   #[test]
+   fn checks_installed_version_for_release() {
+      assert_eq!(
+         check_installed_for_release(Some("0.2.1"), "0.2.2"),
+         InstallUpdateDecision::Apply
+      );
+      assert_eq!(
+         check_installed_for_release(Some("0.2.2"), "0.2.2"),
+         InstallUpdateDecision::AlreadyCurrent
+      );
+      assert_eq!(
+         check_installed_for_release(Some("0.2.3"), "0.2.2"),
+         InstallUpdateDecision::AlreadyCurrent
+      );
+      assert_eq!(
+         check_installed_for_release(Some("v0.2.2"), "v0.2.2"),
+         InstallUpdateDecision::AlreadyCurrent
+      );
+      assert_eq!(
+         check_installed_for_release(None, "0.2.2"),
+         InstallUpdateDecision::UnknownInstalled
+      );
+      assert_eq!(
+         check_installed_for_release(Some("   "), "0.2.2"),
+         InstallUpdateDecision::UnknownInstalled
+      );
+      assert_eq!(
+         check_installed_for_release(Some("not-semver"), "0.2.2"),
+         InstallUpdateDecision::UnknownInstalled
+      );
+      assert_eq!(
+         check_installed_for_release(Some("0.2.1"), "not-semver"),
+         InstallUpdateDecision::Apply
+      );
+   }
+
+   #[test]
+   fn update_lock_and_locked_rollback_preserve_previous() {
+      let dir = env::temp_dir().join(format!(
+         "phoenix-pe-lock-{}-{}",
+         std::process::id(),
+         TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+      ));
+      fs::create_dir_all(&dir).expect("create temp dir");
+
+      let target = dir.join("NyaaCord.exe");
+      let staged = dir.join(".NyaaCord.exe.new");
+      let v1 = build_fake_pe64(b"exe-v1");
+      let v2 = build_fake_pe64(b"exe-v2");
+      fs::write(&target, &v1).expect("write v1");
+      fs::write(&staged, &v2).expect("write v2");
+
+      {
+         let lock = UpdateLock::acquire(&dir).expect("acquire lock");
+         assert!(dir.join(INSTALL_LOCK_FILE).is_file());
+         let prev = replace_exe_with_backup(&staged, &target).expect("replace under lock");
+         assert_eq!(prev, Some(previous_path(&target)));
+         assert_eq!(fs::read(&target).expect("read v2"), v2);
+
+         let restored = rollback_exe_locked(&lock, &target).expect("rollback under lock");
+         assert_eq!(restored, previous_path(&target));
+         assert_eq!(fs::read(&target).expect("read restored v1"), v1);
+         assert_eq!(fs::read(previous_path(&target)).expect("read prev"), v1);
+      }
+
+      // Lock releases cleanly on drop and can be re-acquired.
+      let _relock = UpdateLock::acquire(&dir).expect("re-acquire lock");
       let _ = fs::remove_dir_all(&dir);
    }
 }

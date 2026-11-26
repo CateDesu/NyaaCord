@@ -15,9 +15,15 @@ pub use appimage::{
    apply_update, is_mount_path, previous_path, rollback, spawn_relaunch_watchdog, verify_appimage,
 };
 pub use github::{CheckResult, Config, DEFAULT_REPO, ReleaseInfo, check_latest, fetch_latest};
-pub use pe::verify_pe64;
+pub use pe::{
+   INSTALL_LOCK_FILE, InstallUpdateDecision, UpdateLock, check_installed_for_release,
+   rollback_exe_locked, verify_pe64,
+};
 #[cfg(windows)]
-pub use pe::{apply_update, previous_path, rollback_exe as rollback};
+pub use pe::{
+   apply_update, apply_update_locked, previous_path, query_exe_version,
+   rollback_exe as rollback,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyOutcome {

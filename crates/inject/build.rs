@@ -137,8 +137,19 @@ fn compile_windows_icon(out_dir: &Path) {
    );
 }
 
+fn emit_expect_client() {
+   println!("cargo:rerun-if-env-changed=NYAACORD_EXPECT_CLIENT");
+   if let Ok(raw) = env::var("NYAACORD_EXPECT_CLIENT") {
+      let trimmed = raw.trim();
+      if !trimmed.is_empty() {
+         println!("cargo:rustc-env=NYAACORD_EXPECT_CLIENT={trimmed}");
+      }
+   }
+}
+
 fn main() {
    emit_version();
+   emit_expect_client();
    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set"));
    emit_embedded_assets(&out_dir);
 

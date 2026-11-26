@@ -29,6 +29,9 @@ Usage: scripts/build-windows.sh [options]
 
 Options:
   --version <ver>       Version to embed (default: NYAACORD_VERSION or Cargo.toml workspace version)
+  --client <path>       Discord Phoenix Windows setup exe or directory containing Discord.exe
+                        (default: DISCORD_PHOENIX_WINDOWS_SETUP or auto-detect)
+  --no-client           Build a thin launcher without bundling Discord Phoenix
   --out <path>          Output executable path (default: dist/NyaaCord-x86_64.exe)
   --skip-plugins        Skip esbuild plugin bundling (embed an empty plugin map)
   -h, --help            Show this help message
@@ -101,7 +104,23 @@ find_esbuild() {
    return 1
 }
 
+discover_client() {
+   local cand
+   for cand in \
+      "$ROOT/DiscordPhoenixSetup.exe" \
+      "$HOME/Downloads/DiscordPhoenixSetup.exe" \
+      "$HOME/Applications/DiscordPhoenixSetup.exe"; do
+      if [ -f "$cand" ]; then
+         printf '%s\n' "$cand"
+         return 0
+      fi
+   done
+}
+
 version=${NYAACORD_VERSION:-}
+client=${DISCORD_PHOENIX_WINDOWS_SETUP:-}
+client_explicit=0
+no_client=0
 out="$ROOT/dist/NyaaCord-x86_64.exe"
 skip_plugins=0
 
@@ -111,6 +130,16 @@ while [ "$#" -gt 0 ]; do
          [ "$#" -ge 2 ] || { echo "--version requires a value" >&2; exit 1; }
          version=$2
          shift 2
+         ;;
+      --client)
+         [ "$#" -ge 2 ] || { echo "--client requires a value" >&2; exit 1; }
+         client=$(resolve_path "$2")
+         client_explicit=1
+         shift 2
+         ;;
+      --no-client)
+         no_client=1
+         shift
          ;;
       --out)
          [ "$#" -ge 2 ] || { echo "--out requires a value" >&2; exit 1; }
@@ -133,6 +162,14 @@ while [ "$#" -gt 0 ]; do
    esac
 done
 
+if [ "$client_explicit" = 1 ] && [ "$no_client" = 1 ]; then
+   echo "Cannot combine --client and --no-client" >&2
+   exit 1
+fi
+if [ "$no_client" = 1 ]; then
+   client=""
+fi
+
 for tool in python3 cargo llvm-rc; do
    if ! command -v "$tool" >/dev/null 2>&1; then
       echo "$tool is required" >&2
@@ -145,6 +182,21 @@ if ! cargo xwin --version >/dev/null 2>&1; then
    exit 1
 fi
 
+if [ "$no_client" = 0 ]; then
+   if [ -z "$client" ]; then
+      client=$(discover_client || true)
+   fi
+   if [ -z "$client" ] || { [ ! -f "$client" ] && [ ! -d "$client" ]; }; then
+      echo "Discord Phoenix Windows client not found. Pass --client <path>, set DISCORD_PHOENIX_WINDOWS_SETUP, or pass --no-client." >&2
+      exit 1
+   fi
+   client=$(realpath "$client")
+   if [ -f "$client" ] && ! command -v 7z >/dev/null 2>&1; then
+      echo "7z is required to extract $client" >&2
+      exit 1
+   fi
+fi
+
 if [ -z "$version" ]; then
    version=$(parse_workspace_version)
 fi
@@ -154,7 +206,14 @@ icon_src="$ROOT/web/plugins/nyaacord.png"
 [ -f "$icon_src" ] || { echo "Missing $icon_src" >&2; exit 1; }
 
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+out_tmp=""
+cleanup() {
+   rm -rf "$WORK"
+   if [ -n "$out_tmp" ]; then
+      rm -f "$out_tmp"
+   fi
+}
+trap cleanup EXIT
 
 plugins_bundle="$WORK/libplm.plugins.so"
 if [ "$skip_plugins" = 1 ]; then
@@ -386,6 +445,11 @@ echo "Building phoenix-loader (phoenix.dll, version $version)..."
 dll_bin="$ROOT/target/$TARGET/release/phoenix.dll"
 [ -f "$dll_bin" ] || { echo "Missing built DLL: $dll_bin" >&2; exit 1; }
 
+expect_client=1
+if [ "$no_client" = 1 ]; then
+   expect_client=0
+fi
+
 echo "Building phoenix-inject (NyaaCord-x86_64.exe, version $version)..."
 (
    cd "$ROOT"
@@ -395,6 +459,7 @@ echo "Building phoenix-inject (NyaaCord-x86_64.exe, version $version)..."
    NYAACORD_EMBED_DLL="$dll_bin" \
    NYAACORD_EMBED_PLUGINS="$plugins_bundle" \
    NYAACORD_ICON_ICO="$ico_path" \
+   NYAACORD_EXPECT_CLIENT="$expect_client" \
       cargo xwin build --release --target "$TARGET" -p phoenix-inject
 )
 
@@ -491,11 +556,141 @@ inspect_pe(sys.argv[1], expect_dll=True, expect_icon=False)
 inspect_pe(sys.argv[2], expect_dll=False, expect_icon=True)
 PY
 
+client_zip=""
+if [ "$no_client" = 0 ]; then
+   if [ -d "$client" ]; then
+      client_dir="$client"
+   else
+      client_dir="$WORK/client-src"
+      mkdir -p "$client_dir"
+      echo "Extracting Windows client from $client..."
+      7z x -y "-o$client_dir" "$client" >/dev/null
+   fi
+   if [ ! -f "$client_dir/Discord.exe" ]; then
+      echo "Discord.exe not found in $client_dir" >&2
+      exit 1
+   fi
+
+   client_zip="$WORK/client.zip"
+   echo "Packing Windows client overlay archive..."
+   python3 - "$client_dir" "$client_zip" <<'PY'
+import hashlib, os, sys, zipfile
+
+src_dir, zip_path = sys.argv[1], sys.argv[2]
+CHUNK_BYTES = 1024 * 1024
+FIXED_TIME = (2026, 1, 1, 0, 0, 0)
+SKIP_TOP = {"discordphoenixsetup.exe", "nyaacord-client.stamp", "client-stamp.txt"}
+
+files = []
+for root, dirnames, filenames in os.walk(src_dir, followlinks=False):
+    dirnames.sort()
+    filenames.sort()
+    for name in list(dirnames) + list(filenames):
+        full = os.path.join(root, name)
+        if os.path.islink(full):
+            raise SystemExit(f"Unexpected symlink in Windows client directory: {full}")
+    for name in filenames:
+        full = os.path.join(root, name)
+        rel = os.path.relpath(full, src_dir).replace(os.sep, "/")
+        if "/" not in rel and rel.lower() in SKIP_TOP:
+            continue
+        files.append((rel, full))
+
+files.sort(key=lambda item: item[0])
+assert any(rel == "Discord.exe" for rel, _ in files), "Discord.exe missing from client payload"
+
+manifest = []
+stamp_hasher = hashlib.sha256()
+for rel, full in files:
+    size = os.path.getsize(full)
+    fh_hasher = hashlib.sha256()
+    with open(full, "rb") as fh:
+        while True:
+            chunk = fh.read(CHUNK_BYTES)
+            if not chunk:
+                break
+            fh_hasher.update(chunk)
+    digest = fh_hasher.hexdigest()
+    manifest.append((rel, full, size, digest))
+    stamp_hasher.update(f"{rel}\0{size}\0{digest}\n".encode("utf-8"))
+
+stamp = f"v1:{stamp_hasher.hexdigest()}\n"
+
+with zipfile.ZipFile(
+    zip_path,
+    "w",
+    compression=zipfile.ZIP_DEFLATED,
+    compresslevel=6,
+    allowZip64=True,
+) as zf:
+    for rel, full, size, _ in manifest:
+        zi = zipfile.ZipInfo(filename=rel, date_time=FIXED_TIME)
+        zi.compress_type = zipfile.ZIP_DEFLATED
+        zi.external_attr = 0o100644 << 16
+        with open(full, "rb") as src, zf.open(zi, "w", force_zip64=(size >= (1 << 31))) as dst:
+            while True:
+                chunk = src.read(CHUNK_BYTES)
+                if not chunk:
+                    break
+                dst.write(chunk)
+    stamp_info = zipfile.ZipInfo(filename="nyaacord-client.stamp", date_time=FIXED_TIME)
+    stamp_info.compress_type = zipfile.ZIP_DEFLATED
+    stamp_info.external_attr = 0o100644 << 16
+    with zf.open(stamp_info, "w") as dst:
+        dst.write(stamp.encode("utf-8"))
+
+print(f"Packed {len(manifest)} client files ({os.path.getsize(zip_path)} bytes)")
+print(f"Client stamp: {stamp.strip()}")
+PY
+fi
+
+staged_out="$WORK/out.exe"
+if [ -n "$client_zip" ]; then
+   cat "$exe_bin" "$client_zip" > "$staged_out"
+   echo "Verifying bundled Windows executable and ZIP overlay..."
+   python3 - "$staged_out" <<'PY'
+import os, struct, sys, zipfile
+
+path = sys.argv[1]
+size = os.path.getsize(path)
+with open(path, "rb") as fh:
+    dos = fh.read(64)
+    assert len(dos) == 64 and dos[:2] == b"MZ", f"{path}: missing MZ header"
+    e_lfanew, = struct.unpack_from("<I", dos, 60)
+    assert 64 <= e_lfanew and e_lfanew + 26 <= size, f"{path}: invalid PE offset {e_lfanew}"
+    fh.seek(e_lfanew)
+    pe = fh.read(26)
+    assert len(pe) == 26 and pe[:4] == b"PE\0\0", f"{path}: missing PE signature"
+    machine, _, _, _, _, opt_size, characteristics, opt_magic = struct.unpack("<HHIIIHHH", pe[4:26])
+    assert machine == 0x8664, f"{path}: unexpected machine {machine:#06x}"
+    assert opt_size >= 2 and e_lfanew + 24 + opt_size <= size, f"{path}: invalid optional header size {opt_size}"
+    assert (characteristics & 0x2000) == 0, f"{path}: expected executable, got DLL"
+    assert opt_magic == 0x020B, f"{path}: unexpected optional header magic {opt_magic:#06x}"
+
+with zipfile.ZipFile(path, "r") as zf:
+    names = zf.namelist()
+    assert "Discord.exe" in names, f"{path}: Discord.exe missing from overlay archive"
+    assert "nyaacord-client.stamp" in names, f"{path}: nyaacord-client.stamp missing from overlay archive"
+    assert not any(n.lower() == "discordphoenixsetup.exe" for n in names), (
+        f"{path}: DiscordPhoenixSetup.exe should be excluded from overlay archive"
+    )
+    bad = zf.testzip()
+    assert bad is None, f"{path}: corrupt ZIP entry {bad}"
+    stamp = zf.read("nyaacord-client.stamp").decode("utf-8").strip()
+    assert stamp.startswith("v1:") and len(stamp) == 67, f"{path}: invalid client stamp {stamp!r}"
+    print(f"Verified bundled PE32+ overlay: {len(names)} archive entries, stamp {stamp}")
+PY
+else
+   cp -f "$exe_bin" "$staged_out"
+fi
+
 out_dir=$(dirname "$out")
 out_base=$(basename "$out")
 mkdir -p "$out_dir"
-cp -f "$exe_bin" "$out.tmp"
-mv -f "$out.tmp" "$out"
+out_tmp="$out.tmp"
+cp -f "$staged_out" "$out_tmp"
+mv -f "$out_tmp" "$out"
+out_tmp=""
 
 (cd "$out_dir" && sha256sum "$out_base") > "$out.sha256"
 

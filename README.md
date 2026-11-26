@@ -4,7 +4,7 @@ Linux & Windows · [Downloads](https://github.com/CateDesu/NyaaCord/releases) ·
 
 <img src="web/plugins/nyaacord.gif" alt="NyaaCord icon" width="96">
 
-NyaaCord is a community fork of [Sunbird](https://github.com/sunbird-tools/sunbird) for Discord Phoenix on Linux. It packages Discord Phoenix, the NyaaCord native runtime, default desktop plugins, and an AppImage updater in a single executable.
+NyaaCord is a community fork of [Sunbird](https://github.com/sunbird-tools/sunbird) for Discord Phoenix on Linux and Windows. Each release packages Discord Phoenix, the NyaaCord native runtime, default desktop plugins, and an updater into a single executable.
 
 Set `SUNBIRD_TRAY=1` if you want the extra NyaaCord tray menu.
 
@@ -12,22 +12,33 @@ Set `SUNBIRD_TRAY=1` if you want the extra NyaaCord tray menu.
 
 - Latest Linux AppImage: [NyaaCord-x86_64.AppImage](https://github.com/CateDesu/NyaaCord/releases/latest/download/NyaaCord-x86_64.AppImage)
 - Latest Windows executable: [NyaaCord-x86_64.exe](https://github.com/CateDesu/NyaaCord/releases/latest/download/NyaaCord-x86_64.exe)
-- Release page: [v0.2.0](https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0)
+- Release page: [v0.2.1](https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.1)
 - Checksums: [SHA256SUMS.txt](https://github.com/CateDesu/NyaaCord/releases/latest/download/SHA256SUMS.txt)
 
-Make the AppImage executable and run it:
+On Linux, make the AppImage executable and run it:
 
 ```sh
 chmod +x NyaaCord-x86_64.AppImage
 ./NyaaCord-x86_64.AppImage
 ```
 
-## What the AppImage includes
+On Windows, download and run `NyaaCord-x86_64.exe`. It extracts itself and Discord Phoenix into `%LOCALAPPDATA%\NyaaCord`, creates Start Menu and Desktop shortcuts, and keeps your Discord logins and settings in `%LOCALAPPDATA%\DiscordPhoenix`.
+
+## What each package includes
+
+**Linux AppImage (`NyaaCord-x86_64.AppImage`)**
 
 - Discord Phoenix Linux x86-64 client, build 2233
 - NyaaCord launcher and whole-AppImage updater: `AppRun` and `nyaacord-updater`
-- NyaaCord native runtime `libphoenix.so` with the Linux build 2233 startup and plugin settings fixes, single tray behavior, NyaaCord branding, and icon
+- NyaaCord native runtime `libphoenix.so` with Linux build 2233 startup and plugin settings fixes, single tray behavior, NyaaCord branding, and icon
 - 14 bundled default desktop plugins: `clear-urls`, `dearrow`, `fakenitro`, `fix-embeds`, `global-badges`, `message-latency`, `message-logger`, `no-profile-themes`, `no-reply-mention`, `silent-typing`, `spoiler-mode`, `text-replace`, `translate`, `view-raw`
+
+**Windows executable (`NyaaCord-x86_64.exe`)**
+
+- Discord Phoenix Windows x86-64 client, build 2208
+- Self-contained launcher, updater, and tray icon in one static-CRT executable
+- NyaaCord native runtime `phoenix.dll`
+- Same 14 bundled default desktop plugins (`libplm.plugins.so`)
 
 Plugins live in `plugins/*/src/index.ts` and use the [Phoenix plugin API](crates/runtime/phoenix.d.ts).
 
@@ -73,10 +84,10 @@ The installed launcher in `~/.local/share/sunbird/sunbird` checks for updates au
 Cross-compile the self-contained Windows x86-64 executable from Linux:
 
 ```sh
-./scripts/build-windows.sh
+./scripts/build-windows.sh --client /path/to/DiscordPhoenixSetup.exe
 ```
 
-Output goes to `dist/NyaaCord-x86_64.exe` along with `dist/NyaaCord-x86_64.exe.sha256` and `dist/SHA256SUMS.txt`. Run it directly on Windows or manage the installation via CLI options (`--install-only`, `--check-update`, `--update`, `--rollback`, `--uninstall`).
+Output goes to `dist/NyaaCord-x86_64.exe` along with `dist/NyaaCord-x86_64.exe.sha256` and `dist/SHA256SUMS.txt`. Pass `--no-client` for a thin launcher-only build, or manage an existing install via CLI options (`--install-only`, `--check-update`, `--update`, `--rollback`, `--uninstall`).
 
 Run the automation tests from the program root:
 

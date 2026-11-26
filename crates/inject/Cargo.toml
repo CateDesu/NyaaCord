@@ -10,6 +10,7 @@ misstep         = { workspace = true }
 phoenix-updater = { workspace = true }
 serde           = { workspace = true }
 serde_json      = { workspace = true }
+zip             = { workspace = true, features = [ "deflate-flate2-zlib-rs" ] }
 
 [lints]
 workspace = true
