@@ -9,9 +9,11 @@
 #   curl -fsSL https://assets.sunbird.tools/plugins/sunbird-linux.sh | sh -s -- --uninstall
 #
 # SUNBIRD_SITE points it at a local server for testing.
+# SUNBIRD_LOCAL_LOADER installs a local build and skips loader updates.
 set -eu
 
 site=${SUNBIRD_SITE:-https://assets.sunbird.tools}
+local_loader=${SUNBIRD_LOCAL_LOADER:-}
 data=${XDG_DATA_HOME:-$HOME/.local/share}
 home=$data/sunbird
 entry=$data/applications/sunbird.desktop
@@ -78,11 +80,39 @@ discord=$(realpath "$discord")
 [ -x "$discord" ] || chmod +x "$discord"
 echo "Using Discord Phoenix at $discord"
 
+if [ -n "$local_loader" ] && { [ ! -f "$local_loader" ] || [ ! -r "$local_loader" ]; }; then
+   echo "Cannot read the local loader at $local_loader" >&2
+   exit 1
+fi
+
 # Single-quotes a value for the generated launcher.
 q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
 
 mkdir -p "$home" "$data/applications"
-# The launcher brings the loader up to the site's version before each start,
+auto_update=1
+if [ -n "$local_loader" ]; then
+   auto_update=0
+   tmp=$(mktemp "$home/libphoenix.so.XXXXXX")
+   if ! cp "$local_loader" "$tmp"; then
+      rm -f "$tmp"
+      exit 1
+   fi
+   mv "$tmp" "$home/libphoenix.so"
+fi
+
+local_icon=$(dirname -- "$0")/../web/plugins/sunbird.png
+icon_tmp=$(mktemp "$home/sunbird.png.XXXXXX")
+if [ -f "$0" ] && [ -r "$local_icon" ]; then
+   cp "$local_icon" "$icon_tmp" && mv "$icon_tmp" "$home/sunbird.png"
+elif [ "$auto_update" = 1 ] && curl -fsSL --proto "$proto" --proto-redir =https \
+   --max-time 5 -o "$icon_tmp" "$site/plugins/sunbird.png" 2>/dev/null && [ -s "$icon_tmp" ]; then
+   mv "$icon_tmp" "$home/sunbird.png"
+fi
+rm -f "$icon_tmp"
+icon=discord
+[ ! -f "$home/sunbird.png" ] || icon=$home/sunbird.png
+
+# The launcher updates the loader unless it was installed from a local build,
 # and keeps the one it has when offline. Each run downloads to its own file, so
 # two starts at once never load a half-written one.
 cat >"$home/sunbird" <<EOF
@@ -90,16 +120,21 @@ cat >"$home/sunbird" <<EOF
 home=$(q "$home")
 site=$(q "$site")
 fetch() { curl -fsSL --proto $proto --proto-redir =https "\$@" 2>/dev/null; }
-version=\$(fetch --max-time 5 "\$site/version.json" |
-   sed -n 's/.*"loader": *"\([^"]*\)".*/\1/p')
-if [ -n "\$version" ] && [ "\$version" != "\$(cat "\$home/version" 2>/dev/null)" ]; then
-   tmp=\$(mktemp "\$home/libphoenix.so.XXXXXX")
-   if fetch --max-time 60 -o "\$tmp" "\$site/plugins/libphoenix-linux-x86_64.so"; then
-      mv "\$tmp" "\$home/libphoenix.so"
-      echo "\$version" >"\$home/version"
-   else
-      rm -f "\$tmp"
+if [ "$auto_update" = 1 ]; then
+   version=\$(fetch --max-time 5 "\$site/version.json" |
+      sed -n 's/.*"loader": *"\([^"]*\)".*/\1/p')
+   if [ -n "\$version" ] && [ "\$version" != "\$(cat "\$home/version" 2>/dev/null)" ]; then
+      tmp=\$(mktemp "\$home/libphoenix.so.XXXXXX")
+      if fetch --max-time 60 -o "\$tmp" "\$site/plugins/libphoenix-linux-x86_64.so"; then
+         mv "\$tmp" "\$home/libphoenix.so"
+         echo "\$version" >"\$home/version"
+      else
+         rm -f "\$tmp"
+      fi
    fi
+elif [ ! -r "\$home/libphoenix.so" ]; then
+   echo "Cannot read the local Sunbird loader at \$home/libphoenix.so" >&2
+   exit 1
 fi
 [ "\${1:-}" = --update ] && exit 0
 while [ "\${1:-}" = --no-runtime ] || [ "\${1:-}" = --gate-only ]; do
@@ -140,7 +175,8 @@ Type=Application
 Name=Sunbird
 Comment=Discord with Sunbird
 Exec="$home/sunbird"$exec_args %U
-Icon=discord
+Icon=$icon
+StartupWMClass=com.discord.libdiscord
 Terminal=false
 Categories=Network;InstantMessaging;
 MimeType=x-scheme-handler/discord;
@@ -149,9 +185,11 @@ command -v update-desktop-database >/dev/null && update-desktop-database "$data/
 
 # First download now, so a missing network shows up here rather than as a
 # Discord without Sunbird.
-echo "Downloading Sunbird..."
-rm -f "$home/version"
-"$home/sunbird" --update
+if [ "$auto_update" = 1 ]; then
+   echo "Downloading Sunbird..."
+   rm -f "$home/version"
+   "$home/sunbird" --update
+fi
 if [ -f "$home/libphoenix.so" ]; then
    echo "Sunbird is installed. Open \"Sunbird\" from your app menu to start Discord with it."
 else

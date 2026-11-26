@@ -12,6 +12,7 @@ use phoenix_hook::{
    image::Image,
    x86::{
       Abi,
+      FieldArg,
       call_target,
       jump_target,
    },
@@ -23,6 +24,42 @@ use crate::Found;
 /// host-file body.
 const HOST_FILE_ANCHOR: &[u8] = b"a host file body needs the host's transport";
 
+/// Size of Windows `Discord.exe`'s `TransportRequest`, which
+/// [`RequestLayout::WINDOWS`] describes. Linux build 2233 passes a larger one
+/// with its fields moved, so a larger one is read from `send` instead.
+pub const TRANSPORT_REQUEST_SIZE: usize = 0xF0;
+
+/// A `http::HeaderMap`, the request's first field in every layout seen.
+const HEADER_MAP_SIZE: usize = 0x60;
+/// The request's `Body` enum, a tag and a `bytes::Bytes`.
+const BODY_SIZE: usize = 0x38;
+/// A `String` or an `http::Method`.
+const THREE_WORDS: usize = 0x18;
+
+/// Where the send detour finds a `TransportRequest`'s fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestLayout {
+   pub headers: usize,
+   pub body:    usize,
+   pub url:     usize,
+   pub method:  usize,
+}
+
+impl RequestLayout {
+   /// Windows `Discord.exe`'s.
+   pub const WINDOWS: Self = Self {
+      headers: 0,
+      body:    0x60,
+      url:     0x98,
+      method:  0xC0,
+   };
+}
+
+/// Size of the `Poll<Result<Response, Error>>` the runtime's poll detour
+/// mirrors, the layout of Windows `Discord.exe`. Linux build 2233 returns a
+/// larger one with other niche tags.
+pub const POLL_RESULT_SIZE: usize = 0x80;
+
 /// Located vtable slots and host allocator entry points for Desktop Phoenix's
 /// `libdiscord/crates/http` transport.
 #[derive(Debug, Clone)]
@@ -32,10 +69,16 @@ pub struct DesktopHttpTransport {
    pub send_slots:   Vec<usize>,
    /// Original `ReqwestTransport::send` function address.
    pub send_fn:      usize,
+   /// Bytes `send_fn` reaches into the request it is handed.
+   pub send_input:   usize,
+   /// The request's fields, when they decode.
+   pub request:      Found<RequestLayout>,
    /// All `.rdata` vtable slots holding `SendFuture::poll`.
    pub poll_slots:   Vec<usize>,
    /// Original `SendFuture::poll` function address.
    pub poll_fn:      usize,
+   /// Bytes `poll_fn` writes through its hidden return pointer.
+   pub poll_output:  usize,
    /// Host's `__rust_alloc(size, align)` if located.
    pub host_alloc:   Option<usize>,
    /// Host's `__rust_dealloc(ptr, size, align)` if located.
@@ -60,6 +103,14 @@ impl DesktopHttpTransport {
       let (send_fn, send_end) = image
          .function_bounds(lea)
          .ok_or("ReqwestTransport::send has no unwind entry")?;
+      let send_input = image.read(send_fn, send_end - send_fn).map_or(0, |code| {
+         extent(&phoenix_hook::x86::arg_accesses(abi, code, send_fn, 1))
+      });
+      let request = if send_input <= TRANSPORT_REQUEST_SIZE {
+         Ok(RequestLayout::WINDOWS)
+      } else {
+         request_layout(image, abi, (send_fn, send_end), lea, send_input)
+      };
 
       // 2. Every `dyn Transport` vtable slot in `.rdata` pointing to `send_fn`.
       let send_slots = find_vtable_method_slots(image, send_fn, 1..=0x2000);
@@ -75,6 +126,12 @@ impl DesktopHttpTransport {
       if !poll_slots.contains(&direct_slot) {
          poll_slots.push(direct_slot);
       }
+      let poll_output = image
+         .function_bounds(poll_fn)
+         .and_then(|(start, end)| image.read(start, end - start).map(|code| (start, code)))
+         .map_or(0, |(start, code)| {
+            extent(&phoenix_hook::x86::sret_stores(abi, code, start))
+         });
 
       // 4. The host's own `__rust_alloc` and `__rust_dealloc`, so response body
       //    growth stays allocator-compatible. Both hand the same global allocator
@@ -95,12 +152,112 @@ impl DesktopHttpTransport {
       Ok(Self {
          send_slots,
          send_fn,
+         send_input,
+         request,
          poll_slots,
          poll_fn,
+         poll_output,
          host_alloc,
          host_dealloc,
       })
    }
+
+   /// Whether `SendFuture::poll` returns the [`POLL_RESULT_SIZE`]-byte result
+   /// the poll detour reads and copies. A larger one would overflow the
+   /// detour's copy on the stack, so response hooks stay off.
+   pub fn poll_fits(&self) -> Found<()> {
+      if self.poll_output > POLL_RESULT_SIZE {
+         return Err(format!(
+            "SendFuture::poll fills {:#x} bytes of {POLL_RESULT_SIZE:#x}",
+            self.poll_output
+         ));
+      }
+      Ok(())
+   }
+}
+
+/// The fields of the request `send` is handed, when it is not Windows'.
+///
+/// The body is the field `send` switches on with a jump table one of whose
+/// cases loads [`HOST_FILE_ANCHOR`]. The URL and method are what `send` hands
+/// the request builder, `&request.url` as its fourth argument and a copy of
+/// `request.method` as its third.
+fn request_layout(
+   image: &Image<'_>,
+   abi: Abi,
+   (send_fn, send_end): (usize, usize),
+   anchor_lea: usize,
+   size: usize,
+) -> Found<RequestLayout> {
+   /// A `Body` has a handful of variants.
+   const CASES: usize = 16;
+   /// The case sets a flag or two before loading the anchor.
+   const NEAR: usize = 0x10;
+   let code = image
+      .read(send_fn, send_end - send_fn)
+      .ok_or("ReqwestTransport::send is unmapped")?;
+
+   let mut bodies: Vec<usize> = phoenix_hook::x86::arg_jump_tables(abi, code, send_fn, 1)
+      .into_iter()
+      .filter(|&(_, table)| {
+         (0..CASES).any(|case| {
+            image
+               .read_u32(table + 4 * case)
+               .and_then(|entry| table.checked_add_signed(entry.cast_signed() as isize))
+               .is_some_and(|target| target <= anchor_lea && anchor_lea - target <= NEAR)
+         })
+      })
+      .map(|(offset, _)| offset)
+      .collect();
+   bodies.sort_unstable();
+   bodies.dedup();
+   let body = crate::one("request body switch", &bodies)?;
+
+   let mut builders: Vec<(usize, usize)> =
+      phoenix_hook::x86::arg_field_calls(abi, code, send_fn, 1)
+         .into_iter()
+         .filter_map(|call| {
+            match (call.args[2], call.args[3]) {
+               (Some(FieldArg::Copy(method)), Some(FieldArg::Field(url))) => Some((url, method)),
+               _ => None,
+            }
+         })
+         .collect();
+   builders.sort_unstable();
+   builders.dedup();
+   let (url, method) = crate::one("request builder call", &builders)?;
+
+   let layout = RequestLayout {
+      headers: 0,
+      body,
+      url,
+      method,
+   };
+   let mut fields = [
+      (layout.headers, HEADER_MAP_SIZE),
+      (body, BODY_SIZE),
+      (url, THREE_WORDS),
+      (method, THREE_WORDS),
+   ];
+   fields.sort_unstable();
+   let overlap = fields
+      .windows(2)
+      .any(|pair| pair[0].0 + pair[0].1 > pair[1].0);
+   if overlap || fields.iter().any(|&(at, len)| at + len > size) {
+      return Err(format!(
+         "request fields overlap or pass {size:#x}: {layout:x?}"
+      ));
+   }
+   Ok(layout)
+}
+
+/// The end of the furthest `(offset, size)` access, 0 when there is none.
+fn extent(accesses: &[(usize, usize)]) -> usize {
+   accesses
+      .iter()
+      .map(|&(field, len)| field + len)
+      .max()
+      .unwrap_or(0)
 }
 
 /// Finds all `.rdata` vtable method-0 slots (`vtable + 24`) holding `method_fn`

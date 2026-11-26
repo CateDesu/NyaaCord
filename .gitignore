@@ -67,3 +67,4 @@
 !web/plugins/
 !web/plugins/frida-*.js
 !web/plugins/frida-gadget-*.so.gz
+!web/plugins/sunbird.png

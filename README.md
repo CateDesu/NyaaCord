@@ -1,5 +1,7 @@
 # Phoenix Unlock
 
+<img src="web/plugins/sunbird.png" alt="Sunbird logo" width="112">
+
 [![discord][discord]](https://discord.gg/jEmw3bC2m7)
 
 Patches Phoenix, the native Rust client in Discord's Android alpha builds (356.7, versionCode
@@ -8,6 +10,20 @@ that hook gateway events, add buttons, rows and slash commands to Discord's own 
 own pages under Settings → Phoenix Unlocker.
 
 No root and no Xposed: the APK itself is patched and re-signed.
+
+## Desktop Phoenix on Linux
+
+Build with Rust 1.99 or newer and install with your existing Phoenix AppImage. The launcher
+uses the local loader so future launches keep the Linux fixes from this checkout.
+
+```sh
+cargo build --locked --release -p phoenix-loader
+SUNBIRD_LOCAL_LOADER="$PWD/target/release/libphoenix.so" \
+  sh scripts/sunbird-linux.sh /path/to/discord-phoenix.AppImage
+```
+
+Open **Sunbird** from the app menu. Use **Settings → Sunbird** to install and manage plugins.
+The program uses Phoenix's tray icon. Set `SUNBIRD_TRAY=1` to also show the Sunbird tray menu.
 
 ## Install
 

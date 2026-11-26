@@ -162,6 +162,10 @@ impl DesktopHost for Host {
    }
 
    fn start_tray() {
+      // Phoenix already has a Linux tray icon.
+      if !env::var("SUNBIRD_TRAY").is_ok_and(|value| value == "1") {
+         return;
+      }
       static STARTED: Once = Once::new();
       STARTED.call_once(|| {
          if let Err(err) = start_indicator() {

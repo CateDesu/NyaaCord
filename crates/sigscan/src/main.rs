@@ -128,11 +128,26 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
          report(
             "http transport",
             http.as_ref().map_err(Clone::clone).and_then(|http| {
+               let request = http.request.clone()?;
                prologues
                   .frame
                   .at(image, http.send_fn)
-                  .then(|| at(http.send_fn))
+                  .then(|| {
+                     format!(
+                        "{} (reads {:#x}, {request:x?})",
+                        at(http.send_fn),
+                        http.send_input
+                     )
+                  })
                   .ok_or_else(|| "send prologue changed".to_owned())
+            }),
+         );
+         report(
+            "http responses",
+            http.as_ref().map_err(Clone::clone).and_then(|http| {
+               http
+                  .poll_fits()
+                  .map(|()| format!("{} (fills {:#x})", at(http.poll_fn), http.poll_output))
             }),
          );
          report(
