@@ -2,23 +2,9 @@
 
 use std::sync::atomic::Ordering;
 
-use phoenix_runtime::{
-   Chosen,
-   Control,
-   PluginInfo,
-   update::Catalog,
-};
+use phoenix_runtime::{Chosen, Control, PluginInfo, Removed, update::Catalog};
 
-use crate::settings::{
-   COLOR_ERROR,
-   COLOR_STRING,
-   Field,
-   Job,
-   LOG_QUEUED,
-   Press,
-   TITLE,
-   settings,
-};
+use crate::settings::{COLOR_ERROR, COLOR_STRING, Field, Job, LOG_QUEUED, Press, TITLE, settings};
 
 fn plugin(index: usize) -> Option<PluginInfo> {
    settings().plugins.get(index).cloned()
@@ -32,18 +18,16 @@ pub fn act(job: &Job) {
       // The editor is multiline: Enter is a newline there, and Save saves.
       Job::Submit(Field::Code(_)) | Job::NavigateTo(_) | Job::Draft(..) | Job::Refresh => {},
       Job::Submit(field) => submit(field),
-      Job::Picked(ref picked) => {
-         match picked {
-            Ok(Some((file, bytes))) => {
-               installed(phoenix_runtime::install_file(file, bytes.clone()), file);
-            },
-            Ok(None) => {},
-            Err(err) => {
-               log::error!("file picker: {err}");
-               settings().install_status =
-                  Some((format!("The file picker failed: {err}"), COLOR_ERROR));
-            },
-         }
+      Job::Picked(ref picked) => match picked {
+         Ok(Some((file, bytes))) => {
+            installed(phoenix_runtime::install_file(file, bytes.clone()), file);
+         },
+         Ok(None) => {},
+         Err(err) => {
+            log::error!("file picker: {err}");
+            settings().install_status =
+               Some((format!("The file picker failed: {err}"), COLOR_ERROR));
+         },
       },
       Job::Press(pressed) => press(pressed),
    }
@@ -120,7 +104,8 @@ fn press(pressed: Press) {
       Press::Uninstall(index) => {
          if let Some(plugin) = plugin(index) {
             match phoenix_runtime::uninstall(&plugin.name) {
-               Ok(()) => log::info!("uninstalled {}", plugin.name),
+               Ok(Removed::Removed) => log::info!("uninstalled {}", plugin.name),
+               Ok(Removed::Restored) => log::info!("restored bundled {}", plugin.name),
                Err(err) => log::error!("uninstall failed: {err}"),
             }
          }
@@ -200,7 +185,8 @@ fn listed(index: usize) {
       Some(info) if !info.installed => phoenix_runtime::set_enabled(&info.name, !info.enabled),
       Some(info) => {
          settings().install_status = Some(match phoenix_runtime::uninstall(&info.name) {
-            Ok(()) => (format!("Uninstalled {}.", info.name), COLOR_STRING),
+            Ok(Removed::Removed) => (format!("Uninstalled {}.", info.name), COLOR_STRING),
+            Ok(Removed::Restored) => (format!("Restored bundled {}.", info.name), COLOR_STRING),
             Err(err) => (format!("Uninstall failed: {err}"), COLOR_ERROR),
          });
       },

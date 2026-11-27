@@ -7,48 +7,23 @@
 
 use std::{
    collections::VecDeque,
-   io::{
-      BufRead,
-      BufReader,
-      Read,
-      Write,
-   },
-   net::{
-      SocketAddr,
-      TcpListener,
-      TcpStream,
-   },
+   io::{BufRead, BufReader, Read, Write},
+   net::{SocketAddr, TcpListener, TcpStream},
    path::Path,
    sync::{
-      LazyLock,
-      Mutex,
-      OnceLock,
-      PoisonError,
-      atomic::{
-         AtomicBool,
-         Ordering,
-      },
+      LazyLock, Mutex, OnceLock, PoisonError,
+      atomic::{AtomicBool, Ordering},
    },
    thread,
    time::Duration,
 };
 
-use serde::{
-   Deserialize,
-   Serialize,
-};
+use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::{
-   Chosen,
-   Control,
-   PluginInfo,
-   Setting,
-   update::{
-      self,
-      Catalog,
-      Listed,
-   },
+   Chosen, Control, PluginInfo, Setting,
+   update::{self, Catalog, Listed},
 };
 
 pub const ADDR: &str = "127.0.0.1:4242";
@@ -63,7 +38,7 @@ static EVENTS: Ring = Ring::new(MAX_EVENTS_LOG);
 /// The last entries of a debug log, as JSON.
 pub struct Ring {
    entries: LazyLock<Mutex<VecDeque<Box<RawValue>>>>,
-   max:     usize,
+   max: usize,
 }
 
 impl Ring {
@@ -142,8 +117,8 @@ pub enum Trace<'a> {
    /// One of Discord's own API requests.
    Http {
       method: &'a str,
-      path:   &'a str,
-      bytes:  usize,
+      path: &'a str,
+      bytes: usize,
    },
 }
 
@@ -256,10 +231,7 @@ pub fn dashboard_url() -> String {
 fn random_token() -> String {
    use std::{
       fmt::Write as _,
-      hash::{
-         BuildHasher,
-         Hasher,
-      },
+      hash::{BuildHasher, Hasher},
    };
    let state = std::hash::RandomState::new();
    (0u64..2).fold(String::with_capacity(32), |mut out, at| {
@@ -368,16 +340,16 @@ pub fn ensure_started() {
 
 /// A debug shell request.
 pub struct Request {
-   pub method:     String,
-   pub path:       String,
-   pub query:      String,
-   pub accept:     String,
-   host:           Option<String>,
-   origin:         Option<String>,
+   pub method: String,
+   pub path: String,
+   pub query: String,
+   pub accept: String,
+   host: Option<String>,
+   origin: Option<String>,
    sec_fetch_site: Option<String>,
-   cookie:         Option<String>,
-   token_header:   Option<String>,
-   pub body:       Vec<u8>,
+   cookie: Option<String>,
+   token_header: Option<String>,
+   pub body: Vec<u8>,
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -595,10 +567,10 @@ fn dispatch(req: &Request) -> Reply {
       ("GET", "/" | "/status") => {
          let plugins = crate::plugins();
          ok_json(&Status {
-            version:      crate::update::app_version(),
-            staff:        crate::staff_enabled(),
+            version: crate::update::app_version(),
+            staff: crate::staff_enabled(),
             remote_shell: enabled(),
-            plugins:      plugins.iter().map(PluginJson::from).collect(),
+            plugins: plugins.iter().map(PluginJson::from).collect(),
          })
       },
       ("GET", "/plugins") => {
@@ -673,23 +645,24 @@ fn dispatch(req: &Request) -> Reply {
 
 #[derive(Serialize)]
 struct Status<'a> {
-   version:      &'static str,
-   staff:        bool,
+   version: &'static str,
+   staff: bool,
    remote_shell: bool,
-   plugins:      Vec<PluginJson<'a>>,
+   plugins: Vec<PluginJson<'a>>,
 }
 
 /// A plugin and its state, for `/status` and `/plugins`.
 #[derive(Serialize)]
 struct PluginJson<'a> {
-   name:        &'a str,
-   enabled:     bool,
-   installed:   bool,
-   error:       Option<&'a str>,
-   version:     Option<&'a str>,
-   author:      Option<&'a str>,
+   name: &'a str,
+   enabled: bool,
+   installed: bool,
+   bundled: bool,
+   error: Option<&'a str>,
+   version: Option<&'a str>,
+   author: Option<&'a str>,
    description: Option<&'a str>,
-   settings:    Vec<SettingJson<'a>>,
+   settings: Vec<SettingJson<'a>>,
 }
 
 #[derive(Serialize)]
@@ -711,7 +684,7 @@ enum ControlJson<'a> {
       has_value: bool,
    },
    Select {
-      value:   &'a str,
+      value: &'a str,
       options: Vec<ChoiceJson<'a>>,
    },
    Number {
@@ -722,11 +695,11 @@ enum ControlJson<'a> {
 
 #[derive(Serialize)]
 struct SettingJson<'a> {
-   key:         &'a str,
-   title:       &'a str,
+   key: &'a str,
+   title: &'a str,
    description: Option<&'a str>,
    #[serde(flatten)]
-   control:     ControlJson<'a>,
+   control: ControlJson<'a>,
 }
 
 impl<'a> From<&'a Setting> for SettingJson<'a> {
@@ -734,24 +707,18 @@ impl<'a> From<&'a Setting> for SettingJson<'a> {
       let control = match &setting.control {
          Control::Switch(value) => ControlJson::Switch { value: *value },
          Control::Text(value) => ControlJson::Text { value },
-         Control::Secret(value) => {
-            ControlJson::Secret {
-               has_value: !value.is_empty(),
-            }
+         Control::Secret(value) => ControlJson::Secret {
+            has_value: !value.is_empty(),
          },
-         Control::Select { options, chosen } => {
-            ControlJson::Select {
-               value:   chosen,
-               options: options
-                  .iter()
-                  .map(|choice| {
-                     ChoiceJson {
-                        value: &choice.value,
-                        label: &choice.label,
-                     }
-                  })
-                  .collect(),
-            }
+         Control::Select { options, chosen } => ControlJson::Select {
+            value: chosen,
+            options: options
+               .iter()
+               .map(|choice| ChoiceJson {
+                  value: &choice.value,
+                  label: &choice.label,
+               })
+               .collect(),
          },
          Control::Number(value) => ControlJson::Number { value: *value },
          Control::Button => ControlJson::Button,
@@ -768,14 +735,15 @@ impl<'a> From<&'a Setting> for SettingJson<'a> {
 impl<'a> From<&'a PluginInfo> for PluginJson<'a> {
    fn from(plugin: &'a PluginInfo) -> Self {
       Self {
-         name:        &plugin.name,
-         enabled:     plugin.enabled,
-         installed:   plugin.installed,
-         error:       plugin.error.as_deref(),
-         version:     plugin.header.version.as_deref(),
-         author:      plugin.header.author.as_deref(),
+         name: &plugin.name,
+         enabled: plugin.enabled,
+         installed: plugin.installed,
+         bundled: plugin.bundled,
+         error: plugin.error.as_deref(),
+         version: plugin.header.version.as_deref(),
+         author: plugin.header.author.as_deref(),
          description: plugin.header.description.as_deref(),
-         settings:    plugin.settings.iter().map(SettingJson::from).collect(),
+         settings: plugin.settings.iter().map(SettingJson::from).collect(),
       }
    }
 }
@@ -789,6 +757,7 @@ pub enum Done<'a> {
    Staff(bool),
    Installed(&'a str),
    Uninstalled(&'a str),
+   Restored(&'a str),
    Reloaded(&'a str),
    Enabled(&'a str),
    Disabled(&'a str),
@@ -799,30 +768,28 @@ pub enum Done<'a> {
 fn update_state() -> Reply {
    #[derive(Serialize)]
    struct Found {
-      loader:      Option<String>,
-      plugins:     Vec<String>,
+      loader: Option<String>,
+      plugins: Vec<String>,
       release_url: Option<String>,
    }
 
    #[derive(Serialize)]
    struct State {
-      version:    &'static str,
-      busy:       bool,
+      version: &'static str,
+      busy: bool,
       can_update: bool,
-      status:     Option<String>,
-      found:      Option<Found>,
+      status: Option<String>,
+      found: Option<Found>,
    }
 
    // Read `busy` with Acquire ordering before `status` and `found` so any
    // completed check/apply publishes its final state before clearing `busy`.
    let busy = crate::update::busy();
    let status = crate::update::status();
-   let found = crate::update::found().map(|found| {
-      Found {
-         loader:      found.loader,
-         plugins:     found.plugins,
-         release_url: found.release.map(|rel| rel.release_url),
-      }
+   let found = crate::update::found().map(|found| Found {
+      loader: found.loader,
+      plugins: found.plugins,
+      release_url: found.release.map(|rel| rel.release_url),
    });
    ok_json(&State {
       version: crate::update::app_version(),
@@ -847,18 +814,16 @@ fn plugin_route(method: &str, rest: &str, body: &[u8]) -> Reply {
       return err("400 Bad Request", "invalid plugin name");
    }
    match (method, action) {
-      ("GET", None) => {
-         crate::source(name).map_or_else(
-            || err("404 Not Found", "plugin not found"),
-            |source| {
-               (
-                  "200 OK",
-                  "text/javascript; charset=utf-8",
-                  source.into_bytes(),
-               )
-            },
-         )
-      },
+      ("GET", None) => crate::source(name).map_or_else(
+         || err("404 Not Found", "plugin not found"),
+         |source| {
+            (
+               "200 OK",
+               "text/javascript; charset=utf-8",
+               source.into_bytes(),
+            )
+         },
+      ),
       ("PUT" | "POST", None) => {
          let Ok(source) = String::from_utf8(body.to_vec()) else {
             return err("400 Bad Request", "plugin source must be UTF-8");
@@ -868,17 +833,22 @@ fn plugin_route(method: &str, rest: &str, body: &[u8]) -> Reply {
                crate::refresh_settings();
                ok_json(&Done::Installed(name))
             },
-            Err(message) => err("500 Internal Server Error", &message.to_string()),
-         }
-      },
-      ("DELETE", None) => {
-         match crate::uninstall(name) {
-            Ok(()) => {
-               crate::refresh_settings();
-               ok_json(&Done::Uninstalled(name))
+            Err(message @ crate::Error::InvalidPlugin { .. }) => {
+               err("400 Bad Request", &message.to_string())
             },
             Err(message) => err("500 Internal Server Error", &message.to_string()),
          }
+      },
+      ("DELETE", None) => match crate::uninstall(name) {
+         Ok(crate::Removed::Removed) => {
+            crate::refresh_settings();
+            ok_json(&Done::Uninstalled(name))
+         },
+         Ok(crate::Removed::Restored) => {
+            crate::refresh_settings();
+            ok_json(&Done::Restored(name))
+         },
+         Err(message) => err("500 Internal Server Error", &message.to_string()),
       },
       ("POST", Some("reload")) => {
          crate::reload(name);
@@ -898,7 +868,7 @@ fn plugin_route(method: &str, rest: &str, body: &[u8]) -> Reply {
       ("POST", Some("setting")) => {
          #[derive(Deserialize)]
          struct SetRequest {
-            key:   String,
+            key: String,
             value: Chosen,
          }
          let Ok(req) = serde_json::from_slice::<SetRequest>(body) else {
@@ -949,7 +919,7 @@ fn catalog_install(body: &[u8]) -> Reply {
    #[derive(Deserialize)]
    struct InstallRequest {
       name: Option<String>,
-      url:  Option<String>,
+      url: Option<String>,
    }
 
    let Ok(req) = serde_json::from_slice::<InstallRequest>(body) else {
@@ -1010,19 +980,17 @@ mod tests {
 
    #[test]
    fn takes_the_token_from_query_header_or_cookie() {
-      let request = |query: &str, cookie: Option<&str>, header: Option<&str>| {
-         Request {
-            method:         "GET".to_owned(),
-            path:           "/ui".to_owned(),
-            query:          query.to_owned(),
-            accept:         String::new(),
-            host:           None,
-            origin:         None,
-            sec_fetch_site: None,
-            cookie:         cookie.map(str::to_owned),
-            token_header:   header.map(str::to_owned),
-            body:           Vec::new(),
-         }
+      let request = |query: &str, cookie: Option<&str>, header: Option<&str>| Request {
+         method: "GET".to_owned(),
+         path: "/ui".to_owned(),
+         query: query.to_owned(),
+         accept: String::new(),
+         host: None,
+         origin: None,
+         sec_fetch_site: None,
+         cookie: cookie.map(str::to_owned),
+         token_header: header.map(str::to_owned),
+         body: Vec::new(),
       };
       let token = "abc123";
       assert_eq!(

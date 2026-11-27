@@ -8,10 +8,7 @@
 use std::{
    sync::{
       Arc,
-      atomic::{
-         AtomicU64,
-         Ordering,
-      },
+      atomic::{AtomicU64, Ordering},
    },
    time::Duration,
 };
@@ -19,77 +16,77 @@ use std::{
 use phoenix_runtime::{
    discord::RequestAction,
    js::{
-      Engine,
-      Registry,
-      background::{
-         Settlement,
-         in_background,
-      },
+      Engine, Registry,
+      background::{Settlement, in_background},
    },
-   store::{
-      self,
-      Cell,
-   },
+   local,
+   store::{self, Cell},
 };
-use rquickjs::{
-   Array,
-   CatchResultExt,
-   Ctx,
-   Exception,
-   Function,
-   Object,
-   Value,
-   function::Opt,
-};
+use rquickjs::{Array, CatchResultExt, Ctx, Exception, Function, Object, Value, function::Opt};
+use serde_json::value::RawValue;
 
 use crate::{
-   accessories::{
-      self,
-      RenderedAccessory,
-   },
-   context_menu::{
-      self,
-      ActionMeta,
-   },
+   accessories::{self, RenderedAccessory},
+   composer::{self, ComposerButtonMeta},
+   context_menu::{self, ActionMeta},
    emoji,
    js::Desktop,
-   modal::{
-      self,
-      ModalButton,
-      ModalSection,
-      PageModalSpec,
-   },
+   modal::{self, ModalButton, ModalSection, PageModalSpec},
+   typing,
 };
 
 #[derive(Clone)]
 pub struct DesktopAccessory<'js> {
-   pub id:       u64,
-   pub plugin:   String,
+   pub id: u64,
+   pub plugin: String,
    pub priority: i32,
-   pub render:   Function<'js>,
+   pub render: Function<'js>,
 }
 
 #[derive(Clone)]
 pub struct DesktopAction<'js> {
-   pub id:       u64,
-   pub plugin:   String,
-   pub label:    String,
-   pub icon:     Option<String>,
-   pub danger:   bool,
+   pub id: u64,
+   pub plugin: String,
+   pub label: String,
+   pub icon: Option<String>,
+   pub danger: bool,
    pub priority: i32,
-   pub visible:  Option<Function<'js>>,
+   pub visible: Option<Function<'js>>,
    pub on_press: Function<'js>,
 }
 
 impl DesktopAction<'_> {
    pub fn meta(&self) -> ActionMeta {
       ActionMeta {
-         id:          self.id,
-         label:       self.label.clone(),
-         icon:        self.icon.clone(),
-         danger:      self.danger,
-         priority:    self.priority,
+         id: self.id,
+         label: self.label.clone(),
+         icon: self.icon.clone(),
+         danger: self.danger,
+         priority: self.priority,
          has_visible: self.visible.is_some(),
+      }
+   }
+}
+
+#[derive(Clone)]
+pub struct DesktopComposerButton<'js> {
+   pub id: u64,
+   pub plugin: String,
+   pub icon: String,
+   pub label: String,
+   pub tint: Option<u32>,
+   pub priority: i32,
+   pub on_press: Function<'js>,
+}
+
+impl DesktopComposerButton<'_> {
+   pub fn meta(&self) -> ComposerButtonMeta {
+      ComposerButtonMeta {
+         id: self.id,
+         icon: self.icon.clone(),
+         label: self.label.clone(),
+         tint: self.tint,
+         priority: self.priority,
       }
    }
 }
@@ -311,13 +308,17 @@ fn cached_message_and_me(channel_id: u64, message_id: u64) -> (Option<String>, O
    };
    // Phoenix keys messages `<channel>:<message>`, each zero-padded to 20 digits.
    let rows = if channel_id != 0 {
-      store::query(&db, "SELECT v FROM messages WHERE k = ?", &[format!(
-         "{channel_id:020}:{message_id:020}"
-      )])
+      store::query(
+         &db,
+         "SELECT v FROM messages WHERE k = ?",
+         &[format!("{channel_id:020}:{message_id:020}")],
+      )
    } else {
-      store::query(&db, "SELECT v FROM messages WHERE k LIKE ? LIMIT 1", &[
-         format!("%:{message_id:020}"),
-      ])
+      store::query(
+         &db,
+         "SELECT v FROM messages WHERE k LIKE ? LIMIT 1",
+         &[format!("%:{message_id:020}")],
+      )
    };
    let msg_json = rows
       .ok()
@@ -468,6 +469,149 @@ fn add_message_action<'js>(
    Ok(remove)
 }
 
+fn cached_me_id() -> Option<String> {
+   let state = phoenix_runtime::state()?;
+   let db = store::database(&state.files_dir()).ok()?;
+   store::meta(&db, "me")
+      .ok()
+      .flatten()
+      .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+      .and_then(|val| {
+         val.get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+      })
+}
+
+fn build_ui_context<'js>(ctx: &Ctx<'js>, channel_id: u64) -> rquickjs::Result<Object<'js>> {
+   let arg = Object::new(ctx.clone())?;
+   let ch_opt = (channel_id != 0).then(|| channel_id.to_string());
+   if let Some(ch) = &ch_opt {
+      arg.set("channelId", ch.as_str())?;
+   } else {
+      arg.set("channelId", Value::new_null(ctx.clone()))?;
+   }
+   if let Some(me) = cached_me_id() {
+      arg.set("currentUserId", me.as_str())?;
+   } else {
+      arg.set("currentUserId", Value::new_null(ctx.clone()))?;
+   }
+   let reply_channel = ch_opt;
+   let reply = Function::new(ctx.clone(), move |text: String| -> String {
+      let Some(ch) = reply_channel.as_deref() else {
+         return String::new();
+      };
+      let Ok(embeds) = RawValue::from_string("[]".to_owned()) else {
+         return String::new();
+      };
+      let options = local::Options {
+         author: "Nyaacord",
+         guild_id: None,
+         embeds: &embeds,
+      };
+      local::add(ch, &text, &options).unwrap_or_default()
+   })?;
+   arg.set("reply", reply)?;
+   Ok(arg)
+}
+
+/// Invokes a registered `addComposerButton`'s `onPress(ctx)` callback on the
+/// `QuickJS` worker thread.
+pub fn invoke_composer_button(engine: &Engine, button_id: u64, channel_id: u64) {
+   engine.with(|ctx| {
+      let Some((plugin, on_press)) = ctx.userdata::<Desktop<'_>>().and_then(|registry| {
+         let list = registry.composer_buttons.borrow();
+         let entry = list.iter().find(|e| e.id == button_id)?;
+         Some((entry.plugin.clone(), entry.on_press.clone()))
+      }) else {
+         return;
+      };
+      let Ok(arg) = build_ui_context(&ctx, channel_id) else {
+         return;
+      };
+      if let Err(err) = on_press.call::<_, Value<'_>>((arg,)).catch(&ctx) {
+         log::error!("[{plugin}] addComposerButton onPress: {err}");
+      }
+   });
+}
+
+fn add_composer_button<'js>(
+   ctx: &Ctx<'js>,
+   plugin: &str,
+   options: &Object<'js>,
+) -> rquickjs::Result<Function<'js>> {
+   static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+   let icon = options.get::<_, String>("icon")?;
+   let label = options.get::<_, String>("label")?;
+   let tint = options.get::<_, Option<f64>>("tint")?.map(to_argb);
+   let priority = options.get::<_, Option<i32>>("priority")?.unwrap_or(0);
+   let on_press = options.get::<_, Function<'js>>("onPress")?;
+   let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+
+   let meta = {
+      let registry = ctx
+         .userdata::<Desktop<'js>>()
+         .ok_or_else(|| Exception::throw_internal(ctx, "no registry"))?;
+      let mut list = registry.composer_buttons.borrow_mut();
+      list.push(DesktopComposerButton {
+         id,
+         plugin: plugin.to_owned(),
+         icon,
+         label,
+         tint,
+         priority,
+         on_press,
+      });
+      list.iter().map(DesktopComposerButton::meta).collect()
+   };
+   composer::sync_buttons(meta);
+
+   let remove = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+      if let Some(registry) = ctx.userdata::<Desktop<'js>>() {
+         let mut list = registry.composer_buttons.borrow_mut();
+         let before = list.len();
+         list.retain(|entry| entry.id != id);
+         if list.len() != before {
+            let meta = list.iter().map(DesktopComposerButton::meta).collect();
+            composer::sync_buttons(meta);
+         }
+      }
+   })?;
+   remove.set(
+      "update",
+      Function::new(ctx.clone(), move |ctx: Ctx<'js>, patch: Opt<Value<'js>>| {
+         let Some(object) = patch.0.as_ref().and_then(Value::as_object) else {
+            return;
+         };
+         let Some(registry) = ctx.userdata::<Desktop<'js>>() else {
+            return;
+         };
+         let mut list = registry.composer_buttons.borrow_mut();
+         let Some(entry) = list.iter_mut().find(|entry| entry.id == id) else {
+            return;
+         };
+         if let Ok(Some(icon)) = object.get::<_, Option<String>>("icon") {
+            entry.icon = icon;
+         }
+         if let Ok(Some(label)) = object.get::<_, Option<String>>("label") {
+            entry.label = label;
+         }
+         if let Ok(value) = object.get::<_, Value<'_>>("tint") {
+            if value.is_null() {
+               entry.tint = None;
+            } else if let Some(color) = value.as_number() {
+               entry.tint = Some(to_argb(color));
+            }
+         }
+         let meta = list.iter().map(DesktopComposerButton::meta).collect();
+         drop(list);
+         composer::sync_buttons(meta);
+      })?,
+   )?;
+   Ok(remove)
+}
+
 fn invoke_page_button(button_id: u64) {
    let Some(engine) = phoenix_runtime::engine() else {
       return;
@@ -497,7 +641,7 @@ fn open_page<'js>(
    let page_id = NEXT_PAGE.fetch_add(1, Ordering::Relaxed);
    let title = options
       .get::<_, Option<String>>("title")?
-      .unwrap_or_else(|| "NyaaCord".to_owned());
+      .unwrap_or_else(|| "Nyaacord".to_owned());
    let sections_js = options.get::<_, Option<Array<'js>>>("sections")?;
 
    let mut sections = Vec::new();
@@ -609,6 +753,13 @@ pub fn desktop_patch_api<'js>(
          move |ctx: Ctx<'js>, _function: Opt<Value<'js>>| on_emoji_pick(&ctx, &name),
       )?,
    )?;
+   let name = plugin.to_owned();
+   messages.set(
+      "suppressTyping",
+      Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+         suppress_typing(&ctx, &name)
+      })?,
+   )?;
    let commands = Object::new(ctx.clone())?;
    commands.set(
       "register",
@@ -667,6 +818,14 @@ pub fn desktop_ui_object<'js>(ctx: &Ctx<'js>, plugin: &str) -> rquickjs::Result<
       })?,
    )?;
 
+   let composer_owner = plugin.to_owned();
+   ui.set(
+      "addComposerButton",
+      Function::new(ctx.clone(), move |ctx: Ctx<'js>, options: Object<'js>| {
+         add_composer_button(&ctx, &composer_owner, &options)
+      })?,
+   )?;
+
    let page_owner = plugin.to_owned();
    ui.set(
       "openPage",
@@ -679,7 +838,6 @@ pub fn desktop_ui_object<'js>(ctx: &Ctx<'js>, plugin: &str) -> rquickjs::Result<
    // plugins load without throwing on desktop.
    for slot_fn in [
       "addHeaderButton",
-      "addComposerButton",
       "addProfileSection",
       "addProfileTab",
       "hide",
@@ -738,7 +896,7 @@ fn choose_dialog<'js>(
       ));
    }
    let body = message.map(|text| ModalSection::Text { title: None, text });
-   let title = title.unwrap_or_else(|| "NyaaCord".to_owned());
+   let title = title.unwrap_or_else(|| "Nyaacord".to_owned());
    in_background(ctx, move || answer(title, body, items))
 }
 
@@ -762,7 +920,7 @@ fn sheet_dialog<'js>(
       monospace,
       highlight,
    };
-   let title = title.unwrap_or_else(|| "NyaaCord".to_owned());
+   let title = title.unwrap_or_else(|| "Nyaacord".to_owned());
    in_background(ctx, move || answer(title, Some(body), items))
 }
 
@@ -773,7 +931,7 @@ fn answer(
    body: Option<ModalSection>,
    items: Vec<modal::ChoiceOption>,
 ) -> Settlement {
-   Settlement::Int(Ok(modal::ask(title, body, items, Duration::from_secs(600))))
+   Settlement::Int(Ok(modal::ask(title, body, items, Duration::from_mins(10))))
 }
 
 fn parse_choice_options<'js>(options: &Object<'js>) -> rquickjs::Result<Vec<modal::ChoiceOption>> {
@@ -784,13 +942,13 @@ fn parse_choice_options<'js>(options: &Object<'js>) -> rquickjs::Result<Vec<moda
       .filter_map(|option| {
          if let Some(label) = option.as_string() {
             return Some(modal::ChoiceOption {
-               label:  label.to_string().ok()?,
+               label: label.to_string().ok()?,
                danger: false,
             });
          }
          let option = option.as_object()?;
          Some(modal::ChoiceOption {
-            label:  option.get::<_, Option<String>>("label").ok().flatten()?,
+            label: option.get::<_, Option<String>>("label").ok().flatten()?,
             danger: option
                .get::<_, Option<bool>>("danger")
                .ok()
@@ -880,6 +1038,30 @@ fn on_emoji_pick<'js>(ctx: &Ctx<'js>, plugin: &str) -> rquickjs::Result<Function
          let mut pickers = registry.emoji_pickers.borrow_mut();
          pickers.retain(|(existing, _)| *existing != id);
          emoji::unlock(!pickers.is_empty());
+      }
+   })
+}
+
+/// Suppresses Desktop Phoenix's local typing-start trigger until the returned
+/// remover is called or the plugin unloads.
+fn suppress_typing<'js>(ctx: &Ctx<'js>, plugin: &str) -> rquickjs::Result<Function<'js>> {
+   static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+   let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+   let registry = ctx
+      .userdata::<Desktop<'js>>()
+      .ok_or_else(|| Exception::throw_internal(ctx, "no registry"))?;
+   registry
+      .typing_suppressors
+      .borrow_mut()
+      .push((id, plugin.to_owned()));
+   typing::suppress(true);
+   drop(registry);
+   Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+      if let Some(registry) = ctx.userdata::<Desktop<'js>>() {
+         let mut suppressors = registry.typing_suppressors.borrow_mut();
+         suppressors.retain(|(existing, _)| *existing != id);
+         typing::suppress(!suppressors.is_empty());
       }
    })
 }

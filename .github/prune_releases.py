@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prune superseded NyaaCord GitHub releases after verifying the newest release."""
+"""Prune superseded Nyaacord GitHub releases after verifying the newest release."""
 
 from __future__ import annotations
 
@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Callable
 
 DEFAULT_REPO = "CateDesu/NyaaCord"
-APPIMAGE_ASSET = "NyaaCord-x86_64.AppImage"
+APPIMAGE_ASSET = "Nyaacord-x86_64.AppImage"
+LEGACY_APPIMAGE_ASSET = "NyaaCord-x86_64.AppImage"
 CHECKSUMS_ASSET = "SHA256SUMS.txt"
 REQUIRED_ASSETS = (APPIMAGE_ASSET, CHECKSUMS_ASSET)
 RELEASE_PROJECTION = (
@@ -65,20 +66,26 @@ def is_positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def has_required_assets(release: dict) -> bool:
+def has_required_assets(release: dict, *, allow_legacy: bool = False) -> bool:
     assets = release.get("assets")
     if not isinstance(assets, list):
         return False
-    for required_name in REQUIRED_ASSETS:
-        if not any(
-            isinstance(asset, dict)
-            and asset.get("name") == required_name
-            and asset.get("state") == "uploaded"
-            and is_positive_int(asset.get("size"))
-            for asset in assets
-        ):
-            return False
-    return True
+    appimage_names = (APPIMAGE_ASSET, LEGACY_APPIMAGE_ASSET) if allow_legacy else (APPIMAGE_ASSET,)
+    has_appimage = any(
+        isinstance(asset, dict)
+        and asset.get("name") in appimage_names
+        and asset.get("state") == "uploaded"
+        and is_positive_int(asset.get("size"))
+        for asset in assets
+    )
+    has_sums = any(
+        isinstance(asset, dict)
+        and asset.get("name") == CHECKSUMS_ASSET
+        and asset.get("state") == "uploaded"
+        and is_positive_int(asset.get("size"))
+        for asset in assets
+    )
+    return has_appimage and has_sums
 
 
 def parse_release_stream(text: str) -> list[dict]:
@@ -144,10 +151,10 @@ def retention_plan(releases: list[dict], tag: str | None = None) -> dict:
         parse_version(tag)
         matches = [r for r in releases if r.get("tag_name") == tag]
         if len(matches) != 1:
-            raise ValueError("Published NyaaCord release with required assets is required")
+            raise ValueError("Published Nyaacord release with required assets is required")
         keep = matches[0]
         if not is_stable(keep) or not has_required_assets(keep):
-            raise ValueError("Published NyaaCord release with required assets is required")
+            raise ValueError("Published Nyaacord release with required assets is required")
         keep_tag = tag
     else:
         candidates = [
@@ -156,7 +163,7 @@ def retention_plan(releases: list[dict], tag: str | None = None) -> dict:
             if is_stable(r) and is_numeric_tag(r.get("tag_name")) and has_required_assets(r)
         ]
         if not candidates:
-            raise ValueError("Published NyaaCord release with required assets is required")
+            raise ValueError("Published Nyaacord release with required assets is required")
         keep = max(candidates, key=lambda r: parse_version(r["tag_name"]))
         keep_tag = keep["tag_name"]
 
@@ -174,7 +181,7 @@ def retention_plan(releases: list[dict], tag: str | None = None) -> dict:
         if is_stable(r)
         and is_numeric_tag(r.get("tag_name"))
         and compare_versions(r["tag_name"], keep_tag) < 0
-        and has_required_assets(r)
+        and has_required_assets(r, allow_legacy=True)
     ]
 
     if any(not is_positive_int(r.get("id")) for r in [keep, *remove]):
@@ -348,7 +355,7 @@ def prune_releases(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Prune superseded NyaaCord GitHub releases.")
+    parser = argparse.ArgumentParser(description="Prune superseded Nyaacord GitHub releases.")
     parser.add_argument("--tag", default=None, help="Published tag to keep; defaults to newest stable release")
     parser.add_argument("--dir", dest="local_dir", default=None, help="Optional local dist directory to compare against")
     parser.add_argument("--repo", default=None, help="GitHub owner/name override")

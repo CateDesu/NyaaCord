@@ -22,14 +22,8 @@ pub mod zip;
 
 use std::{
    borrow::Cow,
-   collections::{
-      BTreeMap,
-      HashSet,
-   },
-   fmt::{
-      self,
-      Write,
-   },
+   collections::{BTreeMap, HashSet},
+   fmt::{self, Write},
    io::Read,
    str::FromStr,
 };
@@ -37,17 +31,10 @@ use std::{
 use flate2::read::GzDecoder;
 use phoenix_sigs::{
    PLUGIN_BUNDLE,
-   file::{
-      FileError,
-      Machine,
-   },
+   file::{FileError, Machine},
 };
 
-use crate::zip::{
-   Entry,
-   Method,
-   Record,
-};
+use crate::zip::{Entry, Method, Record};
 
 /// The numbers Phoenix's host name table gives `names` in `apk`.
 ///
@@ -82,7 +69,7 @@ pub enum Error {
    Zip(String),
    #[error("{name}: {source}")]
    Inflate {
-      name:   String,
+      name: String,
       source: std::io::Error,
    },
    #[error("dex: {0}")]
@@ -112,9 +99,9 @@ pub enum Error {
 
 /// A library to add next to the host library of the same machine.
 pub struct Library {
-   name:    String,
+   name: String,
    machine: Machine,
-   bytes:   Vec<u8>,
+   bytes: Vec<u8>,
 }
 
 impl Library {
@@ -128,11 +115,11 @@ impl Library {
    }
 }
 
-/// `NyaaCord`'s plugin runtime: the loader, the libraries it needs and the
+/// `Nyaacord`'s plugin runtime: the loader, the libraries it needs and the
 /// plugins to bundle, by name.
 pub struct Runtime {
    pub libraries: Vec<Library>,
-   pub plugins:   BTreeMap<String, String>,
+   pub plugins: BTreeMap<String, String>,
 }
 
 pub struct Frida {
@@ -148,11 +135,9 @@ impl Frida {
          let mut unpacked = Vec::new();
          GzDecoder::new(&*gadget)
             .read_to_end(&mut unpacked)
-            .map_err(|source| {
-               Error::Inflate {
-                  name: frida::GADGET.to_owned(),
-                  source,
-               }
+            .map_err(|source| Error::Inflate {
+               name: frida::GADGET.to_owned(),
+               source,
             })?;
          unpacked
       } else {
@@ -169,7 +154,7 @@ impl Frida {
 #[derive(Default)]
 pub struct Payload {
    pub runtime: Option<Runtime>,
-   pub frida:   Option<Frida>,
+   pub frida: Option<Frida>,
 }
 
 /// An Android package name, which also has to fit the 127 UTF-16 units of a
@@ -218,11 +203,11 @@ impl fmt::Display for PackageName {
 /// A [`Payload`] ready to add: the loader loads the gadget when both ride
 /// along, and the plugins are serialized once. Output borrows its libraries.
 pub struct Prepared {
-   needed:    Option<&'static str>,
+   needed: Option<&'static str>,
    libraries: Vec<Library>,
-   bundle:    Option<Vec<u8>>,
-   plugins:   Option<Vec<String>>,
-   frida:     Option<Frida>,
+   bundle: Option<Vec<u8>>,
+   plugins: Option<Vec<String>>,
+   frida: Option<Frida>,
 }
 
 impl Payload {
@@ -263,7 +248,7 @@ impl Payload {
 
 #[derive(Default)]
 struct Progress {
-   dex:  bool,
+   dex: bool,
    host: Vec<Machine>,
 }
 
@@ -273,7 +258,7 @@ impl Progress {
          return Ok(());
       }
       Err(Error::Incomplete {
-         dex:  self.dex,
+         dex: self.dex,
          host: !self.host.is_empty(),
       })
    }
@@ -461,11 +446,9 @@ pub fn splits<'a>(
       .map(|(name, apk)| {
          patch_split(apk, prepared, &mut progress, log)
             .map(|entries| (name.as_str(), entries))
-            .map_err(|source| {
-               Error::Apk {
-                  name:   name.clone(),
-                  source: Box::new(source),
-               }
+            .map_err(|source| Error::Apk {
+               name: name.clone(),
+               source: Box::new(source),
             })
       })
       .collect::<Result<Vec<_>, Error>>()?;

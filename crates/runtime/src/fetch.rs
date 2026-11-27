@@ -22,28 +22,28 @@ pub enum FetchError {
 }
 
 pub struct Request {
-   pub url:     String,
-   pub method:  String,
+   pub url: String,
+   pub method: String,
    pub headers: Vec<(String, String)>,
-   pub body:    Option<Vec<u8>>,
+   pub body: Option<Vec<u8>>,
 }
 
 pub struct Response {
    pub status: i32,
-   pub body:   Vec<u8>,
+   pub body: Vec<u8>,
 }
 
 /// The body of a 2xx answer to a GET.
 pub fn get(url: &str) -> Result<Vec<u8>, FetchError> {
    let response = send(&Request {
-      url:     url.to_owned(),
-      method:  "GET".to_owned(),
+      url: url.to_owned(),
+      method: "GET".to_owned(),
       headers: Vec::new(),
-      body:    None,
+      body: None,
    })?;
    if !(200..300).contains(&response.status) {
       return Err(FetchError::Status {
-         url:    url.to_owned(),
+         url: url.to_owned(),
          status: response.status,
       });
    }
@@ -52,10 +52,8 @@ pub fn get(url: &str) -> Result<Vec<u8>, FetchError> {
 
 /// Sends `request` through the platform's native HTTP stack.
 pub fn send(request: &Request) -> Result<Response, FetchError> {
-   let platform = crate::platform().ok_or_else(|| {
-      FetchError::NotStarted {
-         url: request.url.clone(),
-      }
+   let platform = crate::platform().ok_or_else(|| FetchError::NotStarted {
+      url: request.url.clone(),
    })?;
    platform.send(request)
 }

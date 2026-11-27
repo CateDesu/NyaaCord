@@ -20,13 +20,8 @@ use std::{
    ffi::c_void,
    ptr,
    sync::{
-      LazyLock,
-      OnceLock,
-      RwLock,
-      atomic::{
-         AtomicUsize,
-         Ordering,
-      },
+      LazyLock, OnceLock, RwLock,
+      atomic::{AtomicUsize, Ordering},
       mpsc,
    },
 };
@@ -34,10 +29,7 @@ use std::{
 use phoenix_hook::image::Image;
 use phoenix_sigs::desktop;
 
-use crate::gpui::{
-   self,
-   RawAnyElement,
-};
+use crate::gpui::{self, RawAnyElement};
 
 /// Offset of the pending/sending message text color inside `RowColors`
 /// (verified at `0x14a741c1f`: `mov edx, [r12 + 0x34]`).
@@ -73,9 +65,9 @@ type RenderRowFn = unsafe extern "C" fn(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedAccessory {
    pub priority: i32,
-   pub text:     String,
-   pub color:    Option<u32>,
-   pub tint:     Option<u32>,
+   pub text: String,
+   pub color: Option<u32>,
+   pub tint: Option<u32>,
 }
 
 enum CacheEntry {
@@ -145,8 +137,9 @@ fn ensure_worker() -> &'static mpsc::Sender<u64> {
                   if ACTIVE_COUNT.load(Ordering::Acquire) == 0 {
                      break;
                   }
-                  let mut items = phoenix_runtime::engine()
-                     .map_or_else(Vec::new, |engine| crate::js::ui::render_accessories(&engine, mid));
+                  let mut items = phoenix_runtime::engine().map_or_else(Vec::new, |engine| {
+                     crate::js::ui::render_accessories(&engine, mid)
+                  });
                   items.sort_by_key(|a| a.priority);
                   let non_empty = !items.is_empty();
                   if let Ok(mut map) = CACHE.write() {
@@ -286,7 +279,7 @@ fn install_body_tint(image: &Image<'static>, render_row: usize) {
    BODY_MSG_ID_OFFSET.store(msg_id_off, Ordering::Release);
    ROW_COLORS_OFFSET.store(colors_off, Ordering::Release);
 
-   let pro = desktop::Prologues::of(phoenix_hook::x86::Abi::of(image)).row;
+   let pro = body.prologue;
    // SAFETY: runs from `prepare` before Discord threads execute;
    // `build_body_detour` matches `build_message_body`'s verified 6-argument ABI.
    let trampoline = match unsafe {
@@ -303,8 +296,7 @@ fn install_body_tint(image: &Image<'static>, render_row: usize) {
          return;
       },
    };
-   // SAFETY: `trampoline` replays the 17-byte prologue and jumps to `body_fn +
-   // 17`.
+   // SAFETY: `trampoline` replays the displaced prologue and jumps past it.
    let orig = unsafe { std::mem::transmute::<usize, BuildMessageBodyFn>(trampoline) };
    let _ = ORIG_BUILD_BODY.set(orig);
    log::info!(

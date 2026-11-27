@@ -6,30 +6,17 @@
 //! a plugin's hook turns its event on.
 
 use std::{
-   path::{
-      Path,
-      PathBuf,
-   },
+   path::{Path, PathBuf},
    sync::{
-      Mutex,
-      OnceLock,
-      atomic::{
-         AtomicBool,
-         Ordering,
-      },
+      Mutex, OnceLock,
+      atomic::{AtomicBool, Ordering},
    },
 };
 
-use phoenix_hook::image::{
-   BuildId,
-   Image,
-};
+use phoenix_hook::image::{BuildId, Image};
 use phoenix_sigs::{
    LIBRARIES,
-   registry::{
-      self,
-      GatewayRegistry,
-   },
+   registry::{self, GatewayRegistry},
 };
 
 pub mod console;
@@ -44,10 +31,7 @@ pub mod remote;
 pub mod store;
 pub mod update;
 
-pub use platform::{
-   Notice,
-   Platform,
-};
+pub use platform::{Notice, Platform};
 
 #[derive(Debug, flub::Error)]
 pub enum Error {
@@ -59,7 +43,7 @@ pub enum Error {
    NotStarted,
    #[error("{path}: {source}")]
    Io {
-      path:   PathBuf,
+      path: PathBuf,
       #[source]
       source: std::io::Error,
    },
@@ -69,9 +53,9 @@ pub enum Error {
    Registry(#[from] registry::Error),
    #[error("{event}: the registry slot held {found:#x}, the walk read {expected:#x}")]
    SwapConflict {
-      event:    String,
+      event: String,
       expected: usize,
-      found:    usize,
+      found: usize,
    },
    #[error(transparent)]
    Hook(#[from] phoenix_hook::Error),
@@ -81,16 +65,18 @@ pub enum Error {
    PluginFile { name: String },
    #[error("{url}: the download is not UTF-8 text")]
    NotUtf8 { url: String },
+   #[error("invalid plugin: {reason}")]
+   InvalidPlugin { reason: String },
    #[error(transparent)]
    Fetch(#[from] fetch::FetchError),
-   #[error("NyaaCord needs runtime version {version}, the site's plugins need it")]
+   #[error("Nyaacord needs runtime version {version}, the site's plugins need it")]
    LoaderOutdated { version: String },
 }
 
 pub struct State {
    pub image: Image<'static>,
-   pub home:  PathBuf,
-   js:        Mutex<js::Engine>,
+   pub home: PathBuf,
+   js: Mutex<js::Engine>,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -118,27 +104,37 @@ pub fn set_platform(platform: &'static dyn Platform) {
 
 /// A plugin bundle, an esbuild IIFE that receives the `phoenix` API.
 pub struct Plugin {
-   pub name:   String,
+   pub name: String,
    pub source: String,
 }
 
 /// A plugin as the settings page shows it.
 #[derive(Clone, Debug)]
 pub struct PluginInfo {
-   pub name:      String,
-   pub enabled:   bool,
-   pub error:     Option<String>,
+   pub name: String,
+   pub enabled: bool,
+   pub error: Option<String>,
    pub installed: bool,
-   pub header:    Header,
-   pub settings:  Vec<Setting>,
+   pub bundled: bool,
+   pub header: Header,
+   pub settings: Vec<Setting>,
+}
+
+/// Outcome of uninstalling a plugin file from `home/plugins`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Removed {
+   /// A user-installed plugin was removed completely.
+   Removed,
+   /// A user override was removed and the bundled plugin was restored.
+   Restored,
 }
 
 /// The `// @key value` lines a bundle starts with.
 #[derive(Clone, Debug, Default)]
 pub struct Header {
    pub description: Option<String>,
-   pub version:     Option<String>,
-   pub author:      Option<String>,
+   pub version: Option<String>,
+   pub author: Option<String>,
    /// `// @enabled false`, for plugins that stay off until the user turns
    /// them on.
    pub default_off: bool,
@@ -178,10 +174,10 @@ impl From<&str> for Header {
 /// A plugin setting as the user currently has it.
 #[derive(Clone, Debug)]
 pub struct Setting {
-   pub key:         String,
-   pub title:       String,
+   pub key: String,
+   pub title: String,
    pub description: Option<String>,
-   pub control:     Control,
+   pub control: Control,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -192,7 +188,7 @@ pub enum Control {
    Secret(String),
    Select {
       options: Vec<Choice>,
-      chosen:  String,
+      chosen: String,
    },
    Number(f64),
    Button,
@@ -363,30 +359,230 @@ pub fn evaluate(code: &str) {
    }
 }
 
-/// Downloads a plugin bundle into `home/plugins` and loads it, replacing a
-/// plugin of the same name. Returns the plugin's name.
-pub fn install(url: &str) -> Result<String, Error> {
-   let bad_url = || {
-      Error::PluginUrl {
-         url: url.to_owned(),
-      }
+/// Normalizes a plugin URL and extracts its plugin name.
+///
+/// Rewrites GitHub `/blob/` and `/raw/` links to `raw.githubusercontent.com`
+/// and `gist.github.com/.../raw/...` links to `gist.githubusercontent.com`.
+pub fn normalize_plugin_url(raw: &str) -> Result<(String, String), Error> {
+   let trimmed = raw.trim();
+   let bad_url = || Error::PluginUrl {
+      url: raw.to_owned(),
    };
-   let rest = url.strip_prefix("https://").ok_or_else(bad_url)?;
-   let path = rest.split(['?', '#']).next().unwrap_or_default();
-   let name = path
+   if trimmed.is_empty() || trimmed.bytes().any(|b| b <= 0x20 || b == 0x7F) {
+      return Err(bad_url());
+   }
+   let rest = trimmed.strip_prefix("https://").ok_or_else(bad_url)?;
+   let without_frag = rest.split(['?', '#']).next().unwrap_or_default();
+   let (host, path) = without_frag.split_once('/').ok_or_else(bad_url)?;
+   if host.is_empty() || host.contains('@') || path.is_empty() {
+      return Err(bad_url());
+   }
+
+   let normalized = if host.eq_ignore_ascii_case("github.com") {
+      let mut parts = path.splitn(4, '/');
+      let (Some(owner), Some(repo), Some(kind), Some(tail)) =
+         (parts.next(), parts.next(), parts.next(), parts.next())
+      else {
+         return Err(bad_url());
+      };
+      if owner.is_empty()
+         || repo.is_empty()
+         || !matches!(kind, "blob" | "raw")
+         || !tail.contains('/')
+      {
+         return Err(bad_url());
+      }
+      format!("https://raw.githubusercontent.com/{owner}/{repo}/{tail}")
+   } else if host.eq_ignore_ascii_case("gist.github.com") {
+      let segments: Vec<&str> = path.split('/').collect();
+      let raw_pos = segments.iter().position(|&seg| seg == "raw");
+      if raw_pos.is_none_or(|idx| idx == 0 || idx + 1 >= segments.len())
+         || segments.iter().any(|seg| seg.is_empty())
+      {
+         return Err(bad_url());
+      }
+      format!("https://gist.githubusercontent.com/{path}")
+   } else {
+      trimmed.to_owned()
+   };
+
+   let norm_path = normalized
+      .strip_prefix("https://")
+      .unwrap_or_default()
+      .split(['?', '#'])
+      .next()
+      .unwrap_or_default();
+   let name = norm_path
       .rsplit('/')
       .next()
       .and_then(plugin_name)
+      .map(str::to_owned)
       .ok_or_else(bad_url)?;
 
-   let body = fetch::get(url)?;
-   let source = String::from_utf8(body).map_err(|_| {
-      Error::NotUtf8 {
-         url: url.to_owned(),
+   Ok((normalized, name))
+}
+
+fn looks_like_html(trimmed: &str) -> bool {
+   let prefix: String = trimmed.chars().take(16).collect();
+   let lower = prefix.to_ascii_lowercase();
+   lower.starts_with("<!doctype html")
+      || lower.starts_with("<html")
+      || lower.starts_with("<head")
+      || lower.starts_with("<body")
+      || lower.starts_with("<script")
+}
+
+fn looks_like_esm(trimmed: &str) -> bool {
+   trimmed.lines().any(|line| {
+      let line = line.trim_start();
+      if line.starts_with("//") || line.starts_with("/*") || line.starts_with('*') {
+         return false;
       }
+      line.starts_with("import ")
+         || line.starts_with("import{")
+         || line.starts_with("import*")
+         || line.starts_with("import\"")
+         || line.starts_with("import'")
+         || line.starts_with("export ")
+         || line.starts_with("export{")
+         || line.starts_with("export*")
+   })
+}
+
+fn looks_like_typescript(trimmed: &str) -> bool {
+   trimmed.lines().any(|line| {
+      let line = line.trim_start();
+      if line.starts_with("//") || line.starts_with("/*") || line.starts_with('*') {
+         return false;
+      }
+      line.starts_with("interface ")
+         || line.starts_with("type ")
+         || line.starts_with("enum ")
+         || line.starts_with("declare ")
+         || line.contains(": string")
+         || line.contains(": number")
+         || line.contains(": boolean")
+         || line.contains(" as const")
+   })
+}
+
+fn compile_only_js(ctx: &rquickjs::Ctx<'_>, code: &str) -> Result<(), String> {
+   use rquickjs::qjs;
+
+   let Ok(c_code) = std::ffi::CString::new(code) else {
+      return Err("plugin contains a NUL byte".to_owned());
+   };
+   let Ok(code_len) = qjs::size_t::try_from(code.len()) else {
+      return Err("plugin is too large".to_owned());
+   };
+   let raw = ctx.as_raw().as_ptr();
+   #[expect(clippy::cast_possible_wrap, reason = "QuickJS eval flags fit in c_int")]
+   let flags = (qjs::JS_EVAL_TYPE_GLOBAL | qjs::JS_EVAL_FLAG_COMPILE_ONLY) as std::ffi::c_int;
+   // SAFETY: `raw` is a live `JSContext`, `c_code` is NUL-terminated with
+   // matching byte length, and `JS_EVAL_FLAG_COMPILE_ONLY` parses and compiles
+   // bytecode without executing any code.
+   let val = unsafe {
+      qjs::JS_Eval(
+         raw,
+         c_code.as_ptr(),
+         code_len,
+         c"<plugin-check>".as_ptr(),
+         flags,
+      )
+   };
+   // SAFETY: inspect the returned `JSValue` tag on this context.
+   let is_err = unsafe { qjs::JS_VALUE_GET_TAG(val) == qjs::JS_TAG_EXCEPTION };
+   if is_err {
+      let caught = ctx.catch();
+      let err = caught
+         .as_exception()
+         .and_then(rquickjs::Exception::message)
+         .unwrap_or_else(|| format!("{caught:?}"));
+      return Err(err);
+   }
+   // SAFETY: `val` is an owned non-exception bytecode value from `JS_Eval`.
+   unsafe { qjs::JS_FreeValue(raw, val) };
+   Ok(())
+}
+
+/// Validates plugin JavaScript inside an isolated temporary `QuickJS` context
+/// without executing any of its code.
+pub fn validate_plugin_source(source: &str) -> Result<(), Error> {
+   let body = source.strip_prefix('\u{FEFF}').unwrap_or(source);
+   let trimmed = body.trim();
+   if trimmed.is_empty() {
+      return Err(Error::InvalidPlugin {
+         reason: "file is empty".to_owned(),
+      });
+   }
+   if looks_like_html(trimmed) {
+      return Err(Error::InvalidPlugin {
+         reason: "downloaded an HTML page instead of a JavaScript plugin".to_owned(),
+      });
+   }
+   if (trimmed.starts_with('{') || trimmed.starts_with('['))
+      && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+   {
+      return Err(Error::InvalidPlugin {
+         reason: "file is JSON data, not a JavaScript plugin".to_owned(),
+      });
+   }
+
+   let runtime = rquickjs::Runtime::new().map_err(|err| Error::InvalidPlugin {
+      reason: format!("validator runtime failed: {err}"),
    })?;
-   save_source(name, source)?;
-   Ok(name.to_owned())
+   runtime.set_max_stack_size(256 * 1024);
+   runtime.set_memory_limit(16 * 1024 * 1024);
+   runtime.set_interrupt_handler(Some(Box::new(|| true)));
+   let context = rquickjs::Context::full(&runtime).map_err(|err| Error::InvalidPlugin {
+      reason: format!("validator context failed: {err}"),
+   })?;
+
+   // Compile-only checks across three distinct function wrappers: zero code
+   // runs, and any closing-brace breakout fails at least one wrapper's grammar.
+   let wrappers = [
+      format!("(function (phoenix) {{\n{body}\n}})"),
+      format!("function __nyaacord_check(phoenix) {{\n{body}\n}}"),
+      format!("({{ __nyaacord_check(phoenix) {{\n{body}\n}} }})"),
+   ];
+   let check = context.with(|ctx| {
+      for wrapped in &wrappers {
+         compile_only_js(&ctx, wrapped)?;
+      }
+      Ok::<(), String>(())
+   });
+
+   if let Err(err) = check {
+      let reason = if looks_like_esm(trimmed) {
+         format!("ES modules (import/export) must be bundled into a single .js file ({err})")
+      } else if looks_like_typescript(trimmed) {
+         format!("TypeScript syntax must be compiled to plain JavaScript first ({err})")
+      } else {
+         format!("JavaScript syntax error: {err}")
+      };
+      return Err(Error::InvalidPlugin { reason });
+   }
+   Ok(())
+}
+
+fn write_validated_source(plugins_dir: &Path, name: &str, source: &str) -> Result<(), Error> {
+   validate_plugin_source(source)?;
+   let file = plugins_dir.join(format!("{name}.js"));
+   let write = || {
+      std::fs::create_dir_all(plugins_dir)?;
+      std::fs::write(&file, source)
+   };
+   write().map_err(io_error(&file))
+}
+
+/// Downloads a plugin bundle into `home/plugins` and loads it, replacing a
+/// plugin of the same name. Returns the plugin's name.
+pub fn install(url: &str) -> Result<String, Error> {
+   let (fetch_url, name) = normalize_plugin_url(url)?;
+   let body = fetch::get(&fetch_url)?;
+   let source = String::from_utf8(body).map_err(|_| Error::NotUtf8 { url: fetch_url })?;
+   save_source(&name, source)?;
+   Ok(name)
 }
 
 /// The plugin name a file name like `plugin.js` gives.
@@ -402,30 +598,26 @@ fn plugin_name(file: &str) -> Option<&str> {
 /// Installs a bundle the user picked from the device, named by its file name.
 /// Returns the plugin's name.
 pub fn install_file(file: &str, bytes: Vec<u8>) -> Result<String, Error> {
-   let name = plugin_name(file).ok_or_else(|| {
-      Error::PluginFile {
-         name: file.to_owned(),
-      }
+   let name = plugin_name(file).ok_or_else(|| Error::PluginFile {
+      name: file.to_owned(),
    })?;
-   let source = String::from_utf8(bytes).map_err(|_| {
-      Error::NotUtf8 {
-         url: file.to_owned(),
-      }
+   let source = String::from_utf8(bytes).map_err(|_| Error::NotUtf8 {
+      url: file.to_owned(),
    })?;
    save_source(name, source)?;
    Ok(name.to_owned())
 }
 
-/// Writes `source` to `home/plugins/<name>.js` and loads it, replacing the
-/// plugin's code, bundled or not.
+/// Validates and writes `source` to `home/plugins/<name>.js` and loads it,
+/// replacing the plugin's code, bundled or not.
 pub fn save_source(name: &str, source: String) -> Result<(), Error> {
-   let state = STATE.get().ok_or(Error::NotStarted)?;
-   let file = state.plugins_dir().join(format!("{name}.js"));
-   let write = || {
-      std::fs::create_dir_all(state.plugins_dir())?;
-      std::fs::write(&file, &source)
+   let source = if source.starts_with('\u{FEFF}') {
+      source['\u{FEFF}'.len_utf8()..].to_owned()
+   } else {
+      source
    };
-   write().map_err(io_error(&file))?;
+   let state = STATE.get().ok_or(Error::NotStarted)?;
+   write_validated_source(&state.plugins_dir(), name, &source)?;
    if let Some(mut engine) = engine() {
       engine.install(name, source);
    }
@@ -438,15 +630,14 @@ pub fn source(name: &str) -> Option<String> {
    engine()?.source(name)
 }
 
-/// Deletes a plugin installed into `home/plugins` and unloads it.
-pub fn uninstall(name: &str) -> Result<(), Error> {
+/// Deletes a plugin installed into `home/plugins`, restoring the bundled copy
+/// immediately when one exists.
+pub fn uninstall(name: &str) -> Result<Removed, Error> {
    let state = STATE.get().ok_or(Error::NotStarted)?;
    let file = state.plugins_dir().join(format!("{name}.js"));
    std::fs::remove_file(&file).map_err(io_error(&file))?;
-   if let Some(mut engine) = engine() {
-      engine.uninstall(name);
-   }
-   Ok(())
+   let outcome = engine().map_or(Removed::Removed, |mut engine| engine.uninstall(name));
+   Ok(outcome)
 }
 
 /// Evaluates an enabled plugin again with its hooks cleared.
@@ -489,8 +680,8 @@ pub fn hook(image: &Image<'static>) -> Result<&'static GatewayRegistry, Error> {
 
 /// What [`start`] found and loaded.
 pub struct Started {
-   pub target:  String,
-   pub build:   Option<BuildId>,
+   pub target: String,
+   pub build: Option<BuildId>,
    pub plugins: Vec<String>,
 }
 
@@ -561,10 +752,143 @@ impl State {
 }
 
 fn io_error(path: &Path) -> impl FnOnce(std::io::Error) -> Error + '_ {
-   move |source| {
-      Error::Io {
-         path: path.to_owned(),
-         source,
+   move |source| Error::Io {
+      path: path.to_owned(),
+      source,
+   }
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   #[test]
+   fn normalizes_github_and_gist_plugin_urls() {
+      assert_eq!(
+         normalize_plugin_url("https://example.com/plugins/my-plugin.js").unwrap(),
+         (
+            "https://example.com/plugins/my-plugin.js".to_owned(),
+            "my-plugin".to_owned()
+         )
+      );
+      assert_eq!(
+         normalize_plugin_url(
+            "https://github.com/CateDesu/NyaaCord/blob/main/plugins/demo_1.js?plain=1#L4"
+         )
+         .unwrap(),
+         (
+            "https://raw.githubusercontent.com/CateDesu/NyaaCord/main/plugins/demo_1.js".to_owned(),
+            "demo_1".to_owned()
+         )
+      );
+      assert_eq!(
+         normalize_plugin_url("https://github.com/owner/repo/raw/refs/heads/main/foo.js").unwrap(),
+         (
+            "https://raw.githubusercontent.com/owner/repo/refs/heads/main/foo.js".to_owned(),
+            "foo".to_owned()
+         )
+      );
+      assert_eq!(
+         normalize_plugin_url("https://gist.github.com/user/abc123/raw/rev1/helper.js").unwrap(),
+         (
+            "https://gist.githubusercontent.com/user/abc123/raw/rev1/helper.js".to_owned(),
+            "helper".to_owned()
+         )
+      );
+      assert_eq!(
+         normalize_plugin_url("https://gist.github.com/user/abc123/raw/helper.js").unwrap(),
+         (
+            "https://gist.githubusercontent.com/user/abc123/raw/helper.js".to_owned(),
+            "helper".to_owned()
+         )
+      );
+      assert_eq!(
+         normalize_plugin_url("https://gist.githubusercontent.com/user/abc123/raw/helper.js")
+            .unwrap(),
+         (
+            "https://gist.githubusercontent.com/user/abc123/raw/helper.js".to_owned(),
+            "helper".to_owned()
+         )
+      );
+
+      for bad in [
+         "",
+         "http://example.com/plugin.js",
+         "https://example.com/plugin.ts",
+         "https://example.com/plugin.html",
+         "https://github.com/owner/repo",
+         "https://github.com/owner/repo/blob/onlyfile.js",
+         "https://github.com/owner/repo/tree/main/plugin.js",
+         "https://gist.github.com/user/abc123/plugin.js",
+         "https://example.com/bad name.js",
+         "https:///plugin.js",
+      ] {
+         assert!(
+            matches!(normalize_plugin_url(bad), Err(Error::PluginUrl { .. })),
+            "expected {bad:?} to be rejected"
+         );
       }
+   }
+
+   #[test]
+   fn validates_plugin_javascript_and_rejects_bad_inputs() {
+      assert!(validate_plugin_source("phoenix.log.info('ok');").is_ok());
+      assert!(
+         validate_plugin_source("\u{FEFF}// @version 1.0\n(() => { const x = 1; })();").is_ok()
+      );
+      assert!(validate_plugin_source("{ const scoped = 42; phoenix.log.info(scoped); }").is_ok());
+
+      let check_err = |src: &str, needle: &str| {
+         let err = validate_plugin_source(src).expect_err("expected validation failure");
+         let msg = err.to_string();
+         assert!(
+            msg.to_ascii_lowercase()
+               .contains(&needle.to_ascii_lowercase()),
+            "expected {needle:?} in error {msg:?} for input {src:?}"
+         );
+      };
+
+      check_err("   \n\t  ", "empty");
+      check_err("<!DOCTYPE html><html><body>404</body></html>", "html");
+      check_err("<html><head></head></html>", "html");
+      check_err(r#"{"name": "not-a-plugin", "version": "1.0.0"}"#, "json");
+      check_err("[1, 2, 3]", "json");
+      check_err(
+         "import foo from './foo.js';\nconsole.log(foo);",
+         "es module",
+      );
+      check_err("export default function () {}", "es module");
+      check_err(
+         "interface Foo { a: number }\nconst x: string = 'hi';",
+         "typescript",
+      );
+      check_err("const x: number = 123;", "typescript");
+      check_err("function broken( {", "syntax error");
+      // Breakout attempts must fail parsing without executing.
+      check_err("}); while (true) {} ({", "syntax error");
+      check_err("}); throw new Error('executed'); ({", "syntax error");
+      check_err("}; while (true) {} {", "syntax error");
+      check_err("}), while (true) {}, ({", "syntax error");
+      check_err("}+({", "syntax error");
+   }
+
+   #[test]
+   fn invalid_source_never_clobbers_existing_plugin_file() {
+      let dir = std::env::temp_dir().join(format!("nyaacord-validate-test-{}", std::process::id()));
+      let _ = std::fs::remove_dir_all(&dir);
+      let original = "// @version 1.0\nphoenix.log.info('working');\n";
+      write_validated_source(&dir, "demo", original).expect("initial write");
+      let file = dir.join("demo.js");
+      assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+
+      let err = write_validated_source(&dir, "demo", "<!DOCTYPE html><html>oops</html>");
+      assert!(matches!(err, Err(Error::InvalidPlugin { .. })));
+      assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+
+      let err = write_validated_source(&dir, "demo", "function broken( {");
+      assert!(matches!(err, Err(Error::InvalidPlugin { .. })));
+      assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+
+      let _ = std::fs::remove_dir_all(&dir);
    }
 }

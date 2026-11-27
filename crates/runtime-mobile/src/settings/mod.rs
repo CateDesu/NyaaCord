@@ -1,4 +1,4 @@
-//! A "NyaaCord" row in Discord's Settings that opens phoenix's own
+//! A "Nyaacord" row in Discord's Settings that opens phoenix's own
 //! pages.
 //!
 //! Phoenix builds its UI as a stream of UI-op batches from Rust to Java. This
@@ -17,51 +17,24 @@ mod rows;
 mod tree;
 
 use std::{
-   collections::{
-      HashMap,
-      HashSet,
-   },
+   collections::{HashMap, HashSet},
    sync::{
-      LazyLock,
-      Mutex,
-      MutexGuard,
-      OnceLock,
-      PoisonError,
-      atomic::{
-         AtomicBool,
-         Ordering,
-      },
-      mpsc::{
-         self,
-         Sender,
-      },
+      LazyLock, Mutex, MutexGuard, OnceLock, PoisonError,
+      atomic::{AtomicBool, Ordering},
+      mpsc::{self, Sender},
    },
    thread,
 };
 
 use phoenix_runtime::PluginInfo;
-use phoenix_ui_mobile::{
-   Op,
-   Props,
-   encode,
-};
+use phoenix_ui_mobile::{Op, Props, encode};
 
 use crate::{
-   bridge::{
-      self,
-      Action,
-      Sink,
-   },
+   bridge::{self, Action, Sink},
    settings::{
       actions::act,
-      batch::{
-         filter_dispatch,
-         rewrite_ops,
-      },
-      tree::{
-         SlotPool,
-         Tree,
-      },
+      batch::{filter_dispatch, rewrite_ops},
+      tree::{SlotPool, Tree},
    },
 };
 
@@ -70,7 +43,7 @@ const FIRST_ID: i32 = 0x5000_0000;
 /// from 0, so phoenix takes them downward from the top.
 const SLOT_END: i32 = 1 << 16;
 /// The Settings row and the page it opens.
-const TITLE: &str = "NyaaCord";
+const TITLE: &str = "Nyaacord";
 const ICON_PLUGIN: &str = "res://ic_mana_puzzle_piece_plus";
 const ICON_CHECK: &str = "res://ic_mana_checkmark_large";
 const ICON_RELOAD: &str = "res://ic_mana_puzzle_piece_retry";
@@ -161,72 +134,72 @@ enum Slot {
    Log,
 }
 
-/// The "NyaaCord" row in the Settings list.
+/// The "Nyaacord" row in the Settings list.
 struct Entry {
    root: i32,
-   ids:  Vec<i32>,
+   ids: Vec<i32>,
 }
 
 struct Page {
-   root:     i32,
-   ids:      Vec<i32>,
-   kind:     PageKind,
-   content:  i32,
+   root: i32,
+   ids: Vec<i32>,
+   kind: PageKind,
+   content: i32,
    sections: Vec<i32>,
-   slots:    Vec<(i32, Slot)>,
+   slots: Vec<(i32, Slot)>,
    /// The built sections, to update in place when a rerender keeps their shape.
-   trees:    Vec<Tree>,
+   trees: Vec<Tree>,
 }
 
 /// The open Settings screen and what phoenix added to it.
 struct Screen {
-   list:       i32,
+   list: i32,
    /// Rust's own rows in the list and pages on the navigator, kept current
    /// from its batches.
-   rust_rows:  Option<Vec<i32>>,
-   search:     Option<i32>,
-   navigator:  Option<i32>,
+   rust_rows: Option<Vec<i32>>,
+   search: Option<i32>,
+   navigator: Option<i32>,
    rust_pages: Option<Vec<i32>>,
-   header:     Option<Props>,
-   entry:      Option<Entry>,
-   stack:      Vec<Page>,
+   header: Option<Props>,
+   entry: Option<Entry>,
+   stack: Vec<Page>,
 }
 
 struct Settings {
-   next_id:        i32,
-   slots:          SlotPool,
+   next_id: i32,
+   slots: SlotPool,
    /// Motion words for nodes built since the last batch went out. They run
    /// after the batch attaches those nodes.
-   motion:         Vec<i32>,
-   navigators:     HashSet<i32>,
-   screen:         Option<Screen>,
-   handlers:       HashMap<i32, Press>,
-   plugins:        Vec<PluginInfo>,
-   drafts:         HashMap<Field, String>,
+   motion: Vec<i32>,
+   navigators: HashSet<i32>,
+   screen: Option<Screen>,
+   handlers: HashMap<i32, Press>,
+   plugins: Vec<PluginInfo>,
+   drafts: HashMap<Field, String>,
    /// The line nodes in each console log box, replaced on every refresh.
-   log_rows:       HashMap<i32, Vec<i32>>,
+   log_rows: HashMap<i32, Vec<i32>>,
    /// A counter for `forceValue`, which the host applies when it changes.
-   force_seq:      i64,
+   force_seq: i64,
    /// What the last install did, shown on the install page.
    install_status: Option<(String, i64)>,
 }
 
 static SETTINGS: LazyLock<Mutex<Settings>> = LazyLock::new(|| {
    Mutex::new(Settings {
-      next_id:        FIRST_ID,
-      slots:          SlotPool {
-         next:  SLOT_END,
-         free:  Vec::new(),
+      next_id: FIRST_ID,
+      slots: SlotPool {
+         next: SLOT_END,
+         free: Vec::new(),
          owned: HashMap::new(),
       },
-      motion:         Vec::new(),
-      navigators:     HashSet::new(),
-      screen:         None,
-      handlers:       HashMap::new(),
-      plugins:        Vec::new(),
-      drafts:         HashMap::new(),
-      log_rows:       HashMap::new(),
-      force_seq:      1 << 40,
+      motion: Vec::new(),
+      navigators: HashSet::new(),
+      screen: None,
+      handlers: HashMap::new(),
+      plugins: Vec::new(),
+      drafts: HashMap::new(),
+      log_rows: HashMap::new(),
+      force_seq: 1 << 40,
       install_status: None,
    })
 });

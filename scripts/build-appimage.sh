@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds a self-contained NyaaCord Linux x86-64 AppImage from a base Discord Phoenix AppImage.
+# Builds a self-contained Nyaacord Linux x86-64 AppImage from a base Discord Phoenix AppImage.
 set -euo pipefail
 
 CALLER_PWD=$PWD
@@ -29,7 +29,7 @@ Usage: scripts/build-appimage.sh [options]
 Options:
   --version <ver>       Version to embed (default: NYAACORD_VERSION or Cargo.toml workspace version)
   --client <path>       Base Discord Phoenix AppImage (default: DISCORD_PHOENIX_APPIMAGE or auto-detect)
-  --out <path>          Output AppImage path (default: dist/NyaaCord-x86_64.AppImage)
+  --out <path>          Output AppImage path (default: dist/Nyaacord-x86_64.AppImage)
   --comp <gzip|zstd>    SquashFS compression algorithm (default: gzip)
   --skip-cargo          Reuse existing target/release/libphoenix.so and target/release/nyaacord-updater
   -h, --help            Show this help message
@@ -165,7 +165,7 @@ find_esbuild() {
 
 version=${NYAACORD_VERSION:-}
 client=${DISCORD_PHOENIX_APPIMAGE:-}
-out="$ROOT/dist/NyaaCord-x86_64.AppImage"
+out="$ROOT/dist/Nyaacord-x86_64.AppImage"
 comp="gzip"
 skip_cargo=0
 
@@ -455,26 +455,29 @@ for size in SIZES:
         with open(os.path.join(apps_dir, filename), "wb") as fh:
             fh.write(png_bytes)
     if size == 256:
-        with open(os.path.join(appdir, "nyaacord.png"), "wb") as fh:
-            fh.write(png_bytes)
+        for filename in ("nyaacord.png", "com.discord.libdiscord.png"):
+            with open(os.path.join(appdir, filename), "wb") as fh:
+                fh.write(png_bytes)
 PY
 
 install -m 0644 "$gif_icon_src" "$APPDIR/usr/share/nyaacord/nyaacord.gif"
-ln -sf nyaacord.png "$APPDIR/.DirIcon"
+ln -sf com.discord.libdiscord.png "$APPDIR/.DirIcon"
 
 rm -f \
-   "$APPDIR/com.discord.libdiscord.png" \
+   "$APPDIR/nyaacord.desktop" \
+   "$APPDIR/usr/share/applications/nyaacord.desktop" \
    "$APPDIR/com.discord.libdiscord.desktop" \
    "$APPDIR/usr/share/applications/com.discord.libdiscord.desktop"
 
-cat > "$APPDIR/nyaacord.desktop" <<EOF
+mkdir -p "$APPDIR/usr/share/applications"
+cat > "$APPDIR/com.discord.libdiscord.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=NyaaCord
+Name=Nyaacord
 GenericName=Internet Messenger
-Comment=NyaaCord for Discord Phoenix
+Comment=Nyaacord for Discord Phoenix
 Exec=nyaacord %U
-Icon=nyaacord
+Icon=com.discord.libdiscord
 StartupWMClass=com.discord.libdiscord
 Categories=Network;InstantMessaging;
 MimeType=x-scheme-handler/discord;
@@ -482,10 +485,10 @@ StartupNotify=true
 Terminal=false
 X-AppImage-Version=$version
 EOF
-cp "$APPDIR/nyaacord.desktop" "$APPDIR/usr/share/applications/nyaacord.desktop"
+cp "$APPDIR/com.discord.libdiscord.desktop" "$APPDIR/usr/share/applications/com.discord.libdiscord.desktop"
 
 if command -v desktop-file-validate >/dev/null 2>&1; then
-   desktop-file-validate "$APPDIR/nyaacord.desktop"
+   desktop-file-validate "$APPDIR/com.discord.libdiscord.desktop"
 fi
 
 cat > "$APPDIR/AppRun" <<'EOF'
@@ -502,21 +505,21 @@ export NYAACORD_REPO="${NYAACORD_REPO:-CateDesu/NyaaCord}"
 
 usage() {
    cat <<'USAGE'
-Usage: NyaaCord-x86_64.AppImage [options] [-- Discord arguments]
+Usage: Nyaacord-x86_64.AppImage [options] [-- Discord arguments]
 
 Options:
-  --check-update        Check GitHub Releases for a newer NyaaCord AppImage
+  --check-update        Check GitHub Releases for a newer Nyaacord AppImage
   --update              Download and replace this AppImage with the latest release
   --rollback            Restore the previous AppImage backup
   --no-runtime          Launch with only the access gate opened
-  --version             Print NyaaCord version
+  --version             Print Nyaacord version
   --help                Show this help message
 USAGE
 }
 
 case "${1:-}" in
    --version)
-      printf 'NyaaCord %s\n' "$version"
+      printf 'Nyaacord %s\n' "$version"
       exit 0
       ;;
    --help|-h)
@@ -562,7 +565,7 @@ if [ "${NYAACORD_AUTO_UPDATE:-0}" = "1" ] && [ -n "${APPIMAGE:-}" ]; then
    if [ -w "$target_dir" ]; then
       "$HERE/usr/bin/nyaacord-updater" update --current "$version" --target "$appimage" --timeout 5 --quiet || true
       new_v=$(env -u APPIMAGE -u APPDIR -u OWD -u ARGV0 -u NYAACORD_APPDIR -u NYAACORD_VERSION -u NYAACORD_ICON \
-         NYAACORD_AUTO_UPDATE=0 "$appimage" --version 2>/dev/null | sed -n 's/^NyaaCord //p' | head -n 1 | tr -d '\r' | sed 's/^[vV]//' || true)
+         NYAACORD_AUTO_UPDATE=0 "$appimage" --version 2>/dev/null | sed -n 's/^Nyaa[Cc]ord //p' | head -n 1 | tr -d '\r' | sed 's/^[vV]//' || true)
       if [ -n "$new_v" ] && [ "$new_v" != "$version" ]; then
          exec env -u APPIMAGE -u APPDIR -u OWD -u ARGV0 -u NYAACORD_APPDIR -u NYAACORD_VERSION -u NYAACORD_ICON \
             NYAACORD_AUTO_UPDATE=0 "$appimage" "$@"
@@ -687,8 +690,8 @@ mv -f "$out.tmp" "$out"
 
 "$updater_bin" verify --file "$out"
 built_version=$("$out" --version)
-if [ "$built_version" != "NyaaCord $version" ]; then
-   echo "Built AppImage version check failed: got '$built_version', expected 'NyaaCord $version'" >&2
+if [ "$built_version" != "Nyaacord $version" ]; then
+   echo "Built AppImage version check failed: got '$built_version', expected 'Nyaacord $version'" >&2
    exit 1
 fi
 

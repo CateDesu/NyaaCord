@@ -36,26 +36,26 @@ struct Site {
 /// Whole-package release metadata provided by a platform updater.
 #[derive(Clone, Debug)]
 pub struct AppRelease {
-   pub version:      String,
-   pub tag_name:     String,
-   pub asset_name:   String,
+   pub version: String,
+   pub tag_name: String,
+   pub asset_name: String,
    pub download_url: String,
-   pub size:         u64,
-   pub sha256:       String,
-   pub release_url:  String,
+   pub size: u64,
+   pub sha256: String,
+   pub release_url: String,
 }
 
 /// What the site or release channel has that this install lacks.
 #[derive(Clone)]
 pub struct Update {
    /// The newer build or release version.
-   pub loader:      Option<String>,
+   pub loader: Option<String>,
    /// Installed plugins whose code differs from the site's.
-   pub plugins:     Vec<String>,
+   pub plugins: Vec<String>,
    /// Expected CRC-32 for each plugin in [`Self::plugins`].
    pub plugin_crcs: BTreeMap<String, u32>,
    /// Full app release metadata when checked via [`crate::Platform::check_app_update`].
-   pub release:     Option<AppRelease>,
+   pub release: Option<AppRelease>,
 }
 
 /// A plugin the site offers, as `plugins/index.json` lists it.
@@ -178,42 +178,39 @@ pub fn install_listed(name: &str) -> Result<String, crate::Error> {
 /// Asks the platform or site what this install lacks, and remembers it for
 /// [`found`]. `None` means up to date.
 fn query() -> Result<Option<Update>, String> {
-   let update = if let Some(res) =
-      crate::platform().and_then(<dyn crate::Platform>::check_app_update)
-   {
-      res?.map(|rel| {
-         Update {
-            loader:      Some(rel.version.clone()),
-            plugins:     Vec::new(),
+   let update =
+      if let Some(res) = crate::platform().and_then(<dyn crate::Platform>::check_app_update) {
+         res?.map(|rel| Update {
+            loader: Some(rel.version.clone()),
+            plugins: Vec::new(),
             plugin_crcs: BTreeMap::new(),
-            release:     Some(rel),
+            release: Some(rel),
+         })
+      } else {
+         let body =
+            crate::fetch::get(&format!("{ASSETS}version.json")).map_err(|err| err.to_string())?;
+         let site =
+            serde_json::from_slice::<Site>(&body).map_err(|err| format!("version.json: {err}"))?;
+         let loader = (site.loader.as_str() > VERSION).then_some(site.loader);
+         // Plugins come along with a loader update, so one tap brings both.
+         let mut plugins = Vec::new();
+         let mut plugin_crcs = BTreeMap::new();
+         for plugin in crate::plugins() {
+            if let Some(&crc) = site.plugins.get(&plugin.name)
+               && crate::source(&plugin.name)
+                  .is_some_and(|source| crc32fast::hash(source.as_bytes()) != crc)
+            {
+               plugin_crcs.insert(plugin.name.clone(), crc);
+               plugins.push(plugin.name);
+            }
          }
-      })
-   } else {
-      let body =
-         crate::fetch::get(&format!("{ASSETS}version.json")).map_err(|err| err.to_string())?;
-      let site =
-         serde_json::from_slice::<Site>(&body).map_err(|err| format!("version.json: {err}"))?;
-      let loader = (site.loader.as_str() > VERSION).then_some(site.loader);
-      // Plugins come along with a loader update, so one tap brings both.
-      let mut plugins = Vec::new();
-      let mut plugin_crcs = BTreeMap::new();
-      for plugin in crate::plugins() {
-         if let Some(&crc) = site.plugins.get(&plugin.name)
-            && crate::source(&plugin.name)
-               .is_some_and(|source| crc32fast::hash(source.as_bytes()) != crc)
-         {
-            plugin_crcs.insert(plugin.name.clone(), crc);
-            plugins.push(plugin.name);
-         }
-      }
-      (loader.is_some() || !plugins.is_empty()).then_some(Update {
-         loader,
-         plugins,
-         plugin_crcs,
-         release: None,
-      })
-   };
+         (loader.is_some() || !plugins.is_empty()).then_some(Update {
+            loader,
+            plugins,
+            plugin_crcs,
+            release: None,
+         })
+      };
    FOUND
       .lock()
       .unwrap_or_else(PoisonError::into_inner)
@@ -280,8 +277,8 @@ pub fn check_now() {
          Ok(None) => {
             let cur = app_version();
             log::info!("up to date ({cur})");
-            finish(Some(format!("NyaaCord v{cur} is up to date.")));
-            crate::toast("NyaaCord is up to date");
+            finish(Some(format!("Nyaacord v{cur} is up to date.")));
+            crate::toast("Nyaacord is up to date");
          },
          Err(err) => {
             log::info!("update check: {err}");
@@ -328,8 +325,8 @@ pub fn apply() {
       let Some(update) = update else {
          let cur = app_version();
          log::info!("update apply: up to date ({cur})");
-         finish(Some(format!("NyaaCord v{cur} is up to date.")));
-         crate::toast("NyaaCord is up to date");
+         finish(Some(format!("Nyaacord v{cur} is up to date.")));
+         crate::toast("Nyaacord is up to date");
          return;
       };
       // The site's plugins are built against its loader and can call API this
@@ -343,7 +340,7 @@ pub fn apply() {
          }
          if update.plugins.is_empty() {
             let msg = if update.release.is_some() {
-               format!("NyaaCord v{version} is available.")
+               format!("Nyaacord v{version} is available.")
             } else {
                format!("Upstream build {version} is available.")
             };

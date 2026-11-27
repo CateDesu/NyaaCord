@@ -2,32 +2,18 @@
 //! `before` and `after` phases that run them.
 
 use phoenix_sigs::registry::EventId;
-use rquickjs::{
-   CatchResultExt,
-   Ctx,
-   Exception,
-   Function,
-   Object,
-   Value,
-};
+use rquickjs::{CatchResultExt, Ctx, Exception, Function, Object, Value};
 
 use crate::{
-   Error,
-   gateway,
-   js::{
-      Before,
-      Engine,
-      Registry,
-      drain,
-      js_error,
-   },
+   Error, gateway,
+   js::{Before, Engine, Registry, js_error},
 };
 
 #[derive(Clone)]
 pub struct Hook<'js> {
    pub plugin: String,
    pub before: Option<Function<'js>>,
-   pub after:  Option<Function<'js>>,
+   pub after: Option<Function<'js>>,
 }
 
 impl Engine {
@@ -57,7 +43,7 @@ impl Engine {
             json.to_string().map_err(|err| Error::Js(err.to_string()))?,
          ))
       });
-      drain(&self.runtime);
+      self.drain_and_flush();
       result
    }
 
@@ -75,7 +61,7 @@ impl Engine {
          }
          Ok(())
       });
-      drain(&self.runtime);
+      self.drain_and_flush();
       result
    }
 }

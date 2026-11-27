@@ -22,7 +22,7 @@ pub enum Error {
    NotFound { seed: &'static str },
    #[error("{} gateway tables hold {seed}", .slots.len())]
    Ambiguous {
-      seed:  &'static str,
+      seed: &'static str,
       slots: Vec<usize>,
    },
 }
@@ -42,11 +42,11 @@ impl EventId {
 
 #[derive(Clone, Debug)]
 pub struct GatewayEntry {
-   pub name:    String,
+   pub name: String,
    /// All registry table slots holding this event's `{name_ptr, name_len,
    /// handler}` record. Android has one slot per event; desktop builds can
    /// emit duplicate copies of the static domain table across codegen units.
-   pub slots:   Vec<usize>,
+   pub slots: Vec<usize>,
    pub handler: usize,
 }
 
@@ -55,6 +55,7 @@ pub struct GatewayEntry {
 /// The walk crosses either a flat `{name_ptr, name_len, handler}` table
 /// (Android) or `libdiscord`'s 40-byte per-domain descriptor table (Desktop),
 /// plus any separate [`DOMAIN_SEED`] slice (`READY_SUPPLEMENTAL`, etc.).
+#[derive(Default)]
 pub struct GatewayRegistry {
    entries: Vec<GatewayEntry>,
    by_name: HashMap<String, EventId>,
@@ -128,12 +129,10 @@ fn locate_primary(image: &Image<'_>) -> Result<Vec<GatewayEntry>, Error> {
 
    match seeds.as_slice() {
       [(slot, _)] => Ok(walk_from_slot(image, *slot)),
-      _ => {
-         Err(Error::Ambiguous {
-            seed:  SEED,
-            slots: seeds.iter().map(|(slot, _)| *slot).collect(),
-         })
-      },
+      _ => Err(Error::Ambiguous {
+         seed: SEED,
+         slots: seeds.iter().map(|(slot, _)| *slot).collect(),
+      }),
    }
 }
 
@@ -169,8 +168,8 @@ fn entry(image: &Image<'_>, slot: usize) -> Option<GatewayEntry> {
       return None;
    }
    Some(GatewayEntry {
-      name:    String::from_utf8(name.to_vec()).ok()?,
-      slots:   vec![slot],
+      name: String::from_utf8(name.to_vec()).ok()?,
+      slots: vec![slot],
       handler,
    })
 }
@@ -202,12 +201,10 @@ fn walk_flat(image: &Image<'_>, seed: &'static str) -> Result<Vec<GatewayEntry>,
    match seeds.as_slice() {
       [(slot, _)] => Ok(walk_from_slot(image, *slot)),
       [] => Err(Error::NotFound { seed }),
-      _ => {
-         Err(Error::Ambiguous {
-            seed,
-            slots: seeds.iter().map(|(slot, _)| *slot).collect(),
-         })
-      },
+      _ => Err(Error::Ambiguous {
+         seed,
+         slots: seeds.iter().map(|(slot, _)| *slot).collect(),
+      }),
    }
 }
 

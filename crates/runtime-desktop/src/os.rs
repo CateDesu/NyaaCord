@@ -34,17 +34,16 @@ pub trait DesktopOs {
    fn read_memory(addr: usize, len: usize) -> Option<Vec<u8>>;
 }
 
-#[cfg(target_os = "linux")] pub use linux::Linux as Os;
-#[cfg(windows)] pub use windows::Windows as Os;
+#[cfg(target_os = "linux")]
+pub use linux::Linux as Os;
+#[cfg(windows)]
+pub use windows::Windows as Os;
 
 #[cfg(windows)]
 mod windows {
    use std::ffi::c_void;
 
-   use phoenix_hook::{
-      image::Image,
-      x86,
-   };
+   use phoenix_hook::{image::Image, x86};
 
    use super::DesktopOs;
 
@@ -142,23 +141,15 @@ mod windows {
 #[cfg(target_os = "linux")]
 mod linux {
    use std::{
+      ffi::CStr,
       sync::{
-         Mutex,
-         OnceLock,
-         PoisonError,
-         atomic::{
-            AtomicU8,
-            AtomicU64,
-            Ordering,
-         },
+         Mutex, OnceLock, PoisonError,
+         atomic::{AtomicU8, AtomicU64, Ordering},
       },
       time::Instant,
    };
 
-   use phoenix_hook::{
-      image::Image,
-      x86,
-   };
+   use phoenix_hook::{image::Image, x86};
    use phoenix_sigs::desktop;
 
    use super::DesktopOs;
@@ -169,17 +160,17 @@ mod linux {
    type PingFn = unsafe fn(*const usize);
 
    struct Frame {
-      orig:         FrameFn,
+      orig: FrameFn,
       force_render: usize,
-      ping:         PingFn,
+      ping: PingFn,
    }
 
    /// A window's `status`, `ping` and `requested`, each holding one extra
    /// reference so they outlive the window.
    #[derive(Clone, Copy, PartialEq, Eq)]
    struct Window {
-      status:    usize,
-      ping:      usize,
+      status: usize,
+      ping: usize,
       requested: usize,
    }
 
@@ -193,6 +184,7 @@ mod linux {
    const RC_VALUE: usize = 0x10;
    /// A few frames at 60 Hz, so every window renders one forced frame.
    const FORCE_MS: u64 = 100;
+   const PROCESS_NAME: &CStr = c"Nyaacord";
 
    static FRAME: OnceLock<Frame> = OnceLock::new();
    static WINDOWS: Mutex<Vec<Window>> = Mutex::new(Vec::new());
@@ -260,7 +252,7 @@ mod linux {
          return;
       }
       let mut now = libc::timespec {
-         tv_sec:  0,
+         tv_sec: 0,
          tv_nsec: 0,
       };
       // SAFETY: `now` is a valid out pointer; `Instant` reads this clock.
@@ -277,10 +269,24 @@ mod linux {
       unsafe { (frame.ping)(&raw const ping) };
    }
 
+   fn set_process_name(name: &CStr) -> std::io::Result<()> {
+      // SAFETY: `name` is NUL-terminated; Linux truncates `PR_SET_NAME` at 15 bytes.
+      let rc = unsafe { libc::prctl(libc::PR_SET_NAME, name.as_ptr(), 0_usize, 0_usize, 0_usize) };
+      if rc == 0 {
+         Ok(())
+      } else {
+         Err(std::io::Error::last_os_error())
+      }
+   }
+
    pub struct Linux;
 
    impl DesktopOs for Linux {
       fn install(image: &Image<'static>) {
+         match set_process_name(PROCESS_NAME) {
+            Ok(()) => log::info!("process name: set to {}", PROCESS_NAME.to_string_lossy()),
+            Err(err) => log::warn!("process name: {err}"),
+         }
          let found = match desktop::wayland_frame(image) {
             Ok(found) => found,
             Err(err) => {
@@ -308,9 +314,9 @@ mod linux {
          // SAFETY: both are functions of these signatures, located by sigs.
          let _ = FRAME.set(unsafe {
             Frame {
-               orig:         std::mem::transmute::<usize, FrameFn>(trampoline),
+               orig: std::mem::transmute::<usize, FrameFn>(trampoline),
                force_render: found.force_render,
-               ping:         std::mem::transmute::<usize, PingFn>(found.ping),
+               ping: std::mem::transmute::<usize, PingFn>(found.ping),
             }
          });
          log::info!("desktop redraw: hooked Wayland frame @ {:#x}", found.frame);
@@ -347,6 +353,33 @@ mod linux {
 
       fn read_memory(addr: usize, len: usize) -> Option<Vec<u8>> {
          x86::read_memory(addr, len)
+      }
+   }
+
+   #[cfg(test)]
+   mod tests {
+      use super::*;
+
+      #[test]
+      fn sets_thread_comm_name_without_renaming_main_process() {
+         let main_before =
+            std::fs::read_to_string("/proc/self/comm").expect("read /proc/self/comm");
+         let thread_comm = std::thread::spawn(|| {
+            set_process_name(PROCESS_NAME).expect("set process name");
+            std::fs::read_to_string("/proc/thread-self/comm")
+               .or_else(|_| {
+                  // SAFETY: no preconditions.
+                  let tid = unsafe { libc::gettid() };
+                  std::fs::read_to_string(format!("/proc/self/task/{tid}/comm"))
+               })
+               .expect("read thread comm")
+         })
+         .join()
+         .expect("join thread");
+         let main_after = std::fs::read_to_string("/proc/self/comm").expect("read /proc/self/comm");
+
+         assert_eq!(thread_comm.trim_end_matches('\n'), "Nyaacord");
+         assert_eq!(main_before, main_after);
       }
    }
 }

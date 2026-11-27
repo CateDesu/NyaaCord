@@ -11,33 +11,17 @@
 //! [`literal`] finds strings ELF packs without a trailing NUL.
 
 use std::{
-   collections::{
-      HashMap,
-      HashSet,
-   },
-   sync::{
-      Arc,
-      Mutex,
-      PoisonError,
-   },
+   collections::{HashMap, HashSet},
+   sync::{Arc, Mutex, PoisonError},
 };
 
 use phoenix_hook::{
    image::Image,
    pattern::Pattern,
-   x86::{
-      Abi,
-      Register,
-      call_target,
-      jump_target,
-   },
+   x86::{Abi, Register, call_target, jump_target},
 };
 
-use crate::{
-   Found,
-   StaffField,
-   one,
-};
+use crate::{Found, StaffField, one};
 
 /// Win64 `MessageRow::render` and `build_message_body` prologue: 8 pushes and
 /// `mov eax, imm32`, before `call __chkstk`.
@@ -57,7 +41,7 @@ const MEDIA_FETCH_PROLOGUE_LEN: usize = 15;
 #[derive(Clone, Copy)]
 pub struct Prologue {
    pub pattern: Pattern,
-   pub len:     usize,
+   pub len: usize,
 }
 
 impl Prologue {
@@ -73,10 +57,10 @@ impl Prologue {
 #[derive(Clone, Copy)]
 pub struct Prologues {
    /// `MessageRow::render`, `build_message_body` and `MessageContextMenu`.
-   pub row:         Prologue,
+   pub row: Prologue,
    /// `host::section`, `Workspace::render_overlays`, `Store::delete_message`
    /// and `ReqwestTransport::send`.
-   pub frame:       Prologue,
+   pub frame: Prologue,
    pub media_fetch: Prologue,
    /// `getEmojiUnavailableReason`, a leaf: its first four instructions on
    /// Win64, five on System V, up to the `jne`.
@@ -90,39 +74,35 @@ impl Prologues {
    pub const fn of(abi: Abi) -> Self {
       const SYSV_FRAME: Prologue = Prologue {
          pattern: Pattern::new("55 41 57 41 56 41 55 41 54 53 48 81 EC ?? ?? ?? ??"),
-         len:     17,
+         len: 17,
       };
       match abi {
-         Abi::Win64 => {
-            Self {
-               row:         Prologue {
-                  pattern: ROW_PROLOGUE,
-                  len:     ROW_PROLOGUE_LEN,
-               },
-               frame:       Prologue {
-                  pattern: FRAME_PROLOGUE,
-                  len:     FRAME_PROLOGUE_LEN,
-               },
-               media_fetch: Prologue {
-                  pattern: MEDIA_FETCH_PROLOGUE,
-                  len:     MEDIA_FETCH_PROLOGUE_LEN,
-               },
-               emoji_check: Prologue {
-                  pattern: Pattern::new("44 0F B6 ?? ?? B0 03 45 89 ?? 41 83 ?? 02"),
-                  len:     14,
-               },
-            }
+         Abi::Win64 => Self {
+            row: Prologue {
+               pattern: ROW_PROLOGUE,
+               len: ROW_PROLOGUE_LEN,
+            },
+            frame: Prologue {
+               pattern: FRAME_PROLOGUE,
+               len: FRAME_PROLOGUE_LEN,
+            },
+            media_fetch: Prologue {
+               pattern: MEDIA_FETCH_PROLOGUE,
+               len: MEDIA_FETCH_PROLOGUE_LEN,
+            },
+            emoji_check: Prologue {
+               pattern: Pattern::new("44 0F B6 ?? ?? B0 03 45 89 ?? 41 83 ?? 02"),
+               len: 14,
+            },
          },
-         Abi::SysV => {
-            Self {
-               row:         SYSV_FRAME,
-               frame:       SYSV_FRAME,
-               media_fetch: SYSV_FRAME,
-               emoji_check: Prologue {
-                  pattern: Pattern::new("0F B6 ?? ?? B0 03 89 ?? 83 ?? 02 83 ?? 0E"),
-                  len:     14,
-               },
-            }
+         Abi::SysV => Self {
+            row: SYSV_FRAME,
+            frame: SYSV_FRAME,
+            media_fetch: SYSV_FRAME,
+            emoji_check: Prologue {
+               pattern: Pattern::new("0F B6 ?? ?? B0 03 89 ?? 83 ?? 02 83 ?? 0E"),
+               len: 14,
+            },
          },
       }
    }
@@ -287,7 +267,7 @@ pub mod layout {
 /// [`call_target`] into code, or every RIP-relative `lea`. One pass replaces a
 /// `.text` scan per lookup, about a second each on `Discord.exe`.
 struct RefIndex {
-   key:  (usize, usize),
+   key: (usize, usize),
    base: usize,
    refs: Vec<u64>,
 }
@@ -674,12 +654,12 @@ fn same_code(image: &Image<'_>, a: usize, b: usize) -> bool {
          lines
             .into_iter()
             .take(end)
-            .map(|line| {
-               match line.target.filter(|target| local.contains(target)) {
+            .map(
+               |line| match line.target.filter(|target| local.contains(target)) {
                   Some(target) => format!("{} +{:x}", line.len, target - func),
                   None => line.text,
-               }
-            })
+               },
+            )
             .collect(),
       )
    };
@@ -708,18 +688,14 @@ pub(crate) fn callees(image: &Image<'_>, start: usize, end: usize) -> Vec<usize>
 pub fn access_gate(image: &Image<'_>) -> Found<usize> {
    // The `call`'s offset in each: SysV aligns the stack with `push rax` first.
    let (caller, call) = match Abi::of(image) {
-      Abi::Win64 => {
-         (
-            Pattern::new("83 79 ?? 03 75 0C E8 ?? ?? ?? ?? 3C 02 0F 95 C0 EB 02 31 C0"),
-            6,
-         )
-      },
-      Abi::SysV => {
-         (
-            Pattern::new("83 7F ?? 03 75 ?? 50 E8 ?? ?? ?? ?? 3C 02 0F 95 C0 48 83 C4 08 C3"),
-            7,
-         )
-      },
+      Abi::Win64 => (
+         Pattern::new("83 79 ?? 03 75 0C E8 ?? ?? ?? ?? 3C 02 0F 95 C0 EB 02 31 C0"),
+         6,
+      ),
+      Abi::SysV => (
+         Pattern::new("83 7F ?? 03 75 ?? 50 E8 ?? ?? ?? ?? 3C 02 0F 95 C0 48 83 C4 08 C3"),
+         7,
+      ),
    };
    let caller = one("access gate caller", &image.scan(caller))?;
    let access = rel32_target(image, caller + call + 1).ok_or("access gate call does not decode")?;
@@ -733,11 +709,337 @@ pub fn access_gate(image: &Image<'_>) -> Found<usize> {
    }
 }
 
+/// The client access evaluator referenced through the `2026-11-phoenix-app-access`
+/// experiment table.
+///
+/// Returning `Some(true)` (`1`) keeps DM notifications and sounds active without
+/// tripping the client access gate.
+pub fn access_evaluator(image: &Image<'_>) -> Found<usize> {
+   const EXPERIMENT: &[u8] = b"2026-11-phoenix-app-access";
+   let width = image.pointer_width;
+   let slots: Vec<usize> = image
+      .find_bytes(EXPERIMENT)
+      .into_iter()
+      .flat_map(|string| image.pointers_to(string))
+      .filter(|&slot| image.read_usize(slot + width) == Some(EXPERIMENT.len()))
+      .collect();
+   if slots.is_empty() {
+      return Err("access evaluator experiment slot not found".to_owned());
+   }
+
+   let mut functions = Vec::new();
+   for segment in image.segments.iter().filter(|segment| segment.executable) {
+      let bytes = &segment.bytes;
+      for pos in memchr::memchr2_iter(0x8D, 0x8B, bytes) {
+         let (Some(&rex), Some(&modrm), Some(disp)) = (
+            pos.checked_sub(1).and_then(|at| bytes.get(at)),
+            bytes.get(pos + 1),
+            bytes.get(pos + 2..pos + 6),
+         ) else {
+            continue;
+         };
+         if !matches!(rex, 0x48 | 0x4C) || modrm & 0xC7 != 0x05 {
+            continue;
+         }
+         let disp = i32::from_le_bytes([disp[0], disp[1], disp[2], disp[3]]);
+         if let Some(target) = (segment.addr + pos + 6).checked_add_signed(disp as isize)
+            && slots.contains(&target)
+            && let Some(func) = image.function_containing(segment.addr + pos - 1)
+         {
+            functions.push(func);
+         }
+      }
+   }
+   functions.sort_unstable();
+   functions.dedup();
+   one("access evaluator", &functions)
+}
+
+/// Static `{ ptr, len }` slice holding the tray app name (`"Discord"` or
+/// `"Discord Phoenix"`).
+#[derive(Clone, Copy, Debug)]
+pub struct TrayAppName {
+   pub slot: usize,
+   pub string: usize,
+   pub len: usize,
+   pub menu_fn: usize,
+}
+
+/// Linux `StatusNotifierItem::title` leaf thunk, its GOT slot, and Discord's
+/// `String::from(&str)` helper it tail-calls.
+#[derive(Clone, Copy, Debug)]
+pub struct SniTitle {
+   pub func: usize,
+   pub got_slot: usize,
+   pub clone_fn: usize,
+}
+
+/// Windows tray tooltip setter and Discord's `String::from(&str)` helper.
+#[derive(Clone, Copy)]
+pub struct TrayTooltip {
+   pub setter: usize,
+   pub prologue: Prologue,
+   pub string_from: Option<usize>,
+}
+
+/// Windows tray menu `Vec::push` used to add the disabled header item.
+#[derive(Clone, Copy)]
+pub struct TrayHeader {
+   pub menu_push: usize,
+   pub prologue: Prologue,
+}
+
+const TRAY_APP_NAMES: [&[u8]; 2] = [b"Discord Phoenix", b"Discord"];
+
+/// Locates the static `{ ptr, len }` app name slice loaded just before
+/// `"SystemTray.SYSTEM_TRAY_QUIT_APP"`.
+pub fn tray_app_name(image: &Image<'_>) -> Found<TrayAppName> {
+   const QUIT_KEY: &[u8] = b"SystemTray.SYSTEM_TRAY_QUIT_APP";
+   let width = image.pointer_width;
+   let keys = image.find_bytes(QUIT_KEY);
+   if keys.is_empty() {
+      return Err("SystemTray.SYSTEM_TRAY_QUIT_APP not found".to_owned());
+   }
+   let mut found = Vec::new();
+   for lea in lea_refs_many(image, &keys).into_values().flatten() {
+      let Some((menu_fn, _)) = image.function_bounds(lea) else {
+         continue;
+      };
+      let start = lea.saturating_sub(0x80).max(menu_fn);
+      let Some(window) = image.read(start, lea - start) else {
+         continue;
+      };
+      for (_, target) in rip_leas(window, start) {
+         if target % width != 0 || image.is_code(target) {
+            continue;
+         }
+         let (Some(ptr), Some(len)) = (image.read_usize(target), image.read_usize(target + width))
+         else {
+            continue;
+         };
+         if TRAY_APP_NAMES
+            .iter()
+            .any(|&name| len == name.len() && image.read(ptr, len) == Some(name))
+         {
+            found.push((target, ptr, len, menu_fn));
+         }
+      }
+   }
+   found.sort_unstable();
+   found.dedup();
+   let (slot, string, len, menu_fn) = one("tray app name", &found)?;
+   Ok(TrayAppName {
+      slot,
+      string,
+      len,
+      menu_fn,
+   })
+}
+
+/// Locates Linux `StatusNotifierItem::title` (`lea rsi, [name]; push len; pop
+/// rdx; jmp clone_fn`) and its GOT slot.
+pub fn sni_title(image: &Image<'_>, app_name: TrayAppName) -> Found<SniTitle> {
+   let len_u8 = u8::try_from(app_name.len).map_err(|_| "tray app name too long")?;
+   let rdx_loads = imm_loads(Register::RDX, len_u8);
+   let lea_rsi = lea_rip(Register::RSI);
+   let mut thunks = Vec::new();
+   for lea in lea_refs(image, app_name.string) {
+      let Some((start, end)) = image.function_bounds(lea) else {
+         continue;
+      };
+      if start != lea || end - start > 0x20 {
+         continue;
+      }
+      let Some(code) = image.read(start, end - start) else {
+         continue;
+      };
+      if !code.starts_with(&lea_rsi) {
+         continue;
+      }
+      let Some(load) = rdx_loads
+         .iter()
+         .find(|load| code[7..].starts_with(load.as_slice()))
+      else {
+         continue;
+      };
+      let jmp_off = 7 + load.len();
+      if let Some(clone_fn) = jump_target(image, &code[jmp_off..], start + jmp_off)
+         && image.is_code(clone_fn)
+      {
+         thunks.push((start, clone_fn));
+      }
+   }
+   thunks.sort_unstable();
+   thunks.dedup();
+   let (func, clone_fn) = one("sni title thunk", &thunks)?;
+   let got_slots: Vec<usize> = image
+      .pointers_to(func)
+      .into_iter()
+      .filter(|&slot| {
+         image
+            .segments
+            .iter()
+            .any(|seg| seg.writable && seg.contains(slot))
+      })
+      .collect();
+   let got_slot = one("sni title GOT slot", &got_slots)?;
+   Ok(SniTitle {
+      func,
+      got_slot,
+      clone_fn,
+   })
+}
+
+/// Picks the first matching, relocatable prologue at `func`.
+fn match_prologue(image: &Image<'_>, func: usize, candidates: &[Prologue]) -> Option<Prologue> {
+   candidates.iter().copied().find(|pro| {
+      pro.at(image, func)
+         && image
+            .read(func, pro.len)
+            .is_some_and(|head| phoenix_hook::x86::relocatable(head, func))
+   })
+}
+
+/// Locates Windows tray tooltip setter anchored on `"tray: icon registered"`.
+pub fn tray_tooltip(image: &Image<'_>) -> Found<TrayTooltip> {
+   const PROLOGUES: [Prologue; 3] = [
+      Prologue {
+         pattern: Pattern::new("55 56 57 53 48 83 EC ?? 48 8D 6C 24 ?? 48 C7 45 ?? FE FF FF FF"),
+         len: 21,
+      },
+      Prologue {
+         pattern: Pattern::new("55 56 57 53 48 81 EC ?? ?? ?? ?? 48 8D 6C 24 ??"),
+         len: 16,
+      },
+      Prologue {
+         pattern: FRAME_PROLOGUE,
+         len: FRAME_PROLOGUE_LEN,
+      },
+   ];
+   let anchors = image.find_bytes(b"tray: icon registered");
+   if anchors.is_empty() {
+      return Err("tray: icon registered string not found".to_owned());
+   }
+   let mut reg_fns: Vec<(usize, usize)> = lea_refs_many(image, &anchors)
+      .into_values()
+      .flatten()
+      .filter_map(|lea| image.function_bounds(lea))
+      .collect();
+   reg_fns.sort_unstable();
+   reg_fns.dedup();
+   let (reg_start, reg_end) = one("tray registration function", &reg_fns)?;
+   let body = image
+      .read(reg_start, reg_end - reg_start)
+      .ok_or("tray registration function unreadable")?;
+   let lea_r8 = lea_rip(Register::R8);
+   let mut setters = Vec::new();
+   for (site, target) in rip_leas(body, reg_start) {
+      if image.read(site, 3) != Some(&lea_r8[..]) {
+         continue;
+      }
+      let Some(name) = TRAY_APP_NAMES
+         .iter()
+         .copied()
+         .find(|name| image.read(target, name.len()) == Some(*name))
+      else {
+         continue;
+      };
+      let Ok(len_u8) = u8::try_from(name.len()) else {
+         continue;
+      };
+      let after_len = (reg_end - (site + 7)).min(0x28);
+      let Some(after) = image.read(site + 7, after_len) else {
+         continue;
+      };
+      let r9_loads = imm_loads(Register::R9, len_u8);
+      if !r9_loads
+         .iter()
+         .any(|load| after.windows(load.len()).any(|w| w == load.as_slice()))
+      {
+         continue;
+      }
+      if let Some(&(_, setter)) = calls_in(image, site + 7, after_len).first() {
+         setters.push(setter);
+      }
+   }
+   setters.sort_unstable();
+   setters.dedup();
+   let setter = one("tray tooltip setter", &setters)?;
+   let prologue =
+      match_prologue(image, setter, &PROLOGUES).ok_or("tray tooltip setter prologue changed")?;
+   let string_from = calls_in(image, setter, 0x40)
+      .first()
+      .map(|&(_, callee)| callee)
+      .filter(|&addr| image.is_code(addr));
+   Ok(TrayTooltip {
+      setter,
+      prologue,
+      string_from,
+   })
+}
+
+/// Locates Windows tray menu `Vec::push` that inserts the disabled `"Discord"`
+/// header item inside `menu_fn`.
+pub fn tray_header(image: &Image<'_>, menu_fn: usize) -> Found<TrayHeader> {
+   const PROLOGUES: [Prologue; 3] = [
+      Prologue {
+         pattern: Pattern::new("55 56 57 48 83 EC ?? 48 8D 6C 24 ?? 48 C7 45 ?? FE FF FF FF"),
+         len: 20,
+      },
+      Prologue {
+         pattern: Pattern::new("55 56 57 48 81 EC ?? ?? ?? ?? 48 8D 6C 24 ??"),
+         len: 15,
+      },
+      Prologue {
+         pattern: FRAME_PROLOGUE,
+         len: FRAME_PROLOGUE_LEN,
+      },
+   ];
+   let head = image
+      .read(menu_fn, 0x100)
+      .ok_or("tray menu builder unreadable")?;
+   let disc = head
+      .windows(4)
+      .position(|w| w == b"Disc")
+      .ok_or("tray header literal not found")?;
+   if !head[..head.len().min(disc + 12)]
+      .windows(4)
+      .any(|w| w == b"cord")
+   {
+      return Err("tray header literal incomplete".to_owned());
+   }
+   let after = &head[disc..];
+   if !after[..after.len().min(0x40)]
+      .windows(2)
+      .any(|w| w == [0x00, 0x02])
+   {
+      return Err("tray header disabled flag not found".to_owned());
+   }
+   let menu_push = calls_in(image, menu_fn + disc, 0x60)
+      .first()
+      .ok_or("tray header menu push call not found")?
+      .1;
+   let push_code = function_code(image, menu_push, "tray menu push")?;
+   // `imul reg, reg, 0x18`, 24-byte `TrayMenuItem` element stride.
+   let has_stride = push_code
+      .windows(4)
+      .any(|w| w[0] & 0xF0 == 0x40 && w[1] == 0x6B && w[3] == 0x18);
+   if !has_stride {
+      return Err("tray menu push stride changed".to_owned());
+   }
+   let prologue =
+      match_prologue(image, menu_push, &PROLOGUES).ok_or("tray menu push prologue changed")?;
+   Ok(TrayHeader {
+      menu_push,
+      prologue,
+   })
+}
+
 /// Phoenix's `getEmojiUnavailableReason`, `u8 f(&Emoji, &EmojiContext)`,
 /// where 0xFF is usable and 2 premium locked.
 #[derive(Clone, Copy, Debug)]
 pub struct EmojiCheck {
-   pub func:      usize,
+   pub func: usize,
    /// `EmojiContext.intention`, 3 (`CHAT`) for the message box.
    pub intention: usize,
 }
@@ -751,28 +1053,22 @@ pub fn emoji_check(image: &Image<'_>) -> Found<EmojiCheck> {
    let abi = Abi::of(image);
    // And where the `movzx`'s ModRM sits.
    let (check, modrm) = match abi {
-      Abi::Win64 => {
-         (
-            Pattern::new("44 0F B6 ?? ?? B0 03 45 89 ?? 41 83 ?? 02 41 83 ?? 0E 75 01 C3"),
-            3,
-         )
-      },
-      Abi::SysV => {
-         (
-            Pattern::new("0F B6 ?? ?? B0 03 89 ?? 83 ?? 02 83 ?? 0E 75 01 C3"),
-            2,
-         )
-      },
+      Abi::Win64 => (
+         Pattern::new("44 0F B6 ?? ?? B0 03 45 89 ?? 41 83 ?? 02 41 83 ?? 0E 75 01 C3"),
+         3,
+      ),
+      Abi::SysV => (
+         Pattern::new("0F B6 ?? ?? B0 03 89 ?? 83 ?? 02 83 ?? 0E 75 01 C3"),
+         2,
+      ),
    };
    let func = one("emoji check", &image.scan(check))?;
    let (context, _) = reg(abi.arg(1));
    match image.read(func + modrm, 2) {
-      Some(&[modrm, disp]) if modrm & 0xC7 == 0x40 | context => {
-         Ok(EmojiCheck {
-            func,
-            intention: usize::from(disp),
-         })
-      },
+      Some(&[modrm, disp]) if modrm & 0xC7 == 0x40 | context => Ok(EmojiCheck {
+         func,
+         intention: usize::from(disp),
+      }),
       _ => Err(format!("emoji check at {func:#x} reads no context byte")),
    }
 }
@@ -782,7 +1078,7 @@ pub fn emoji_check(image: &Image<'_>) -> Found<EmojiCheck> {
 #[derive(Clone, Copy, Debug)]
 pub struct SettingsLabel {
    pub name: usize,
-   pub id:   usize,
+   pub id: usize,
 }
 
 /// Page 24's label, from its one loader: `lea rax, [name]` with length 7,
@@ -815,12 +1111,10 @@ pub fn settings_label_parts(image: &Image<'_>) -> Found<SettingsLabel> {
 pub fn settings_visibility(image: &Image<'_>) -> Found<usize> {
    // `movzx ecx, <page>; mov al, 1; lea <arg2>, [rcx-9]; cmp <arg2>, 0xf; ja ...`
    let (guard, imm) = match Abi::of(image) {
-      Abi::Win64 => {
-         (
-            Pattern::new("0F B6 C9 B0 01 44 8D 41 F7 41 83 F8 0F 77"),
-            12,
-         )
-      },
+      Abi::Win64 => (
+         Pattern::new("0F B6 C9 B0 01 44 8D 41 F7 41 83 F8 0F 77"),
+         12,
+      ),
       Abi::SysV => (Pattern::new("40 0F B6 CF B0 01 8D 51 F7 83 FA 0F 77"), 11),
    };
    Ok(one("settings visibility guard", &image.scan(guard))? + imm)
@@ -829,7 +1123,7 @@ pub fn settings_visibility(image: &Image<'_>) -> Found<usize> {
 /// `host::section`, which renders a settings page, and where its state keeps
 /// the active page.
 pub struct Section {
-   pub func:        usize,
+   pub func: usize,
    pub page_offset: usize,
 }
 
@@ -859,28 +1153,28 @@ pub fn settings_section(image: &Image<'_>) -> Found<Section> {
 /// Discord's own GPUI and Mana builders the settings page calls.
 pub struct Gpui {
    /// The `Location` `div_new` takes, a static in `.rdata`.
-   pub caller_loc:       usize,
-   pub div_new:          usize,
-   pub div_flex:         usize,
-   pub div_flex_col:     usize,
-   pub div_style_mut:    usize,
-   pub div_child_div:    usize,
+   pub caller_loc: usize,
+   pub div_new: usize,
+   pub div_flex: usize,
+   pub div_flex_col: usize,
+   pub div_style_mut: usize,
+   pub div_child_div: usize,
    pub div_child_button: usize,
-   pub div_into_any:     usize,
-   pub div_push_any:     Option<usize>,
-   pub str_into_any:     Option<usize>,
-   pub text_block:       usize,
-   pub switch_new:       usize,
-   pub switch_into_div:  usize,
-   pub button_new:       usize,
-   pub action_row:       usize,
-   pub alloc_or_oom:     usize,
+   pub div_into_any: usize,
+   pub div_push_any: Option<usize>,
+   pub str_into_any: Option<usize>,
+   pub text_block: usize,
+   pub switch_new: usize,
+   pub switch_into_div: usize,
+   pub button_new: usize,
+   pub action_row: usize,
+   pub alloc_or_oom: usize,
    /// Discord's `Switch` label, description and `on_change` setters, and a
    /// `Button::on_click`, which the layouts are read from.
-   pub switch_label:     usize,
-   pub switch_desc:      usize,
+   pub switch_label: usize,
+   pub switch_desc: usize,
    pub switch_on_change: usize,
-   pub button_on_click:  usize,
+   pub button_on_click: usize,
 }
 
 /// The builders, from the Developer Mode row of page 16 and the
@@ -1061,64 +1355,64 @@ fn arg1_lea_before(image: &Image<'_>, abi: Abi, call: usize) -> Option<usize> {
 #[derive(Debug, Clone, Copy)]
 pub struct StyleOffsets {
    /// `StyleRefinement` bytes, from `Interactivity::default`'s box.
-   pub bytes:           usize,
-   pub font_size:       usize,
-   pub line_height:     usize,
-   pub font_family:     usize,
-   pub text_color:      usize,
-   pub white_space:     usize,
-   pub flex_shrink:     usize,
-   pub background:      usize,
-   pub border_color:    usize,
-   pub overflow_x:      usize,
-   pub position:        usize,
-   pub flex_wrap:       usize,
-   pub display:         usize,
-   pub align_items:     usize,
+   pub bytes: usize,
+   pub font_size: usize,
+   pub line_height: usize,
+   pub font_family: usize,
+   pub text_color: usize,
+   pub white_space: usize,
+   pub flex_shrink: usize,
+   pub background: usize,
+   pub border_color: usize,
+   pub overflow_x: usize,
+   pub position: usize,
+   pub flex_wrap: usize,
+   pub display: usize,
+   pub align_items: usize,
    pub justify_content: usize,
-   pub border_widths:   [usize; 4],
-   pub corner_radii:    [usize; 4],
-   pub padding:         [usize; 4],
-   pub inset:           [usize; 4],
-   pub gap:             [usize; 2],
-   pub size:            [usize; 2],
-   pub min_size:        [usize; 2],
+   pub border_widths: [usize; 4],
+   pub corner_radii: [usize; 4],
+   pub padding: [usize; 4],
+   pub inset: [usize; 4],
+   pub gap: [usize; 2],
+   pub size: [usize; 2],
+   pub min_size: [usize; 2],
 }
 
 /// `gpui::Div`: its size, `SmallVec<[AnyElement; 2]>` children, and boxed
 /// `Interactivity`.
 #[derive(Debug, Clone, Copy)]
 pub struct DivLayout {
-   pub size:               usize,
-   pub children:           usize,
-   pub interactivity:      usize,
+   pub size: usize,
+   pub children: usize,
+   pub interactivity: usize,
    pub interactivity_size: usize,
 }
 
 /// `mana_gpui::components::switch::Switch`.
 #[derive(Debug, Clone, Copy)]
 pub struct SwitchLayout {
-   pub size:        usize,
-   pub label:       usize,
+   pub size: usize,
+   pub label: usize,
    pub description: usize,
-   pub on_change:   usize,
+   pub on_change: usize,
 }
 
 /// `mana_gpui::components::button::Button`.
 #[derive(Debug, Clone, Copy)]
 pub struct ButtonLayout {
-   pub size:     usize,
+   pub size: usize,
    pub on_click: usize,
-   pub variant:  usize,
+   pub variant: usize,
    /// The `ButtonSize` field.
-   pub scale:    usize,
+   pub scale: usize,
 }
 
 /// What the settings page and accessories build by hand.
 #[derive(Debug, Clone, Copy)]
 pub struct GpuiLayout {
-   pub style:  StyleOffsets,
-   pub div:    DivLayout,
+   pub style: StyleOffsets,
+   pub div: DivLayout,
    pub switch: SwitchLayout,
    pub button: ButtonLayout,
 }
@@ -1324,12 +1618,10 @@ fn button_style_fields(image: &Image<'_>, button_new: usize, size: usize) -> Fou
       {
          Ok((variant, scale))
       },
-      _ => {
-         Err(format!(
-            "Button variant and size stores are ambiguous ({:x?})",
-            &ranked[..ranked.len().min(4)]
-         ))
-      },
+      _ => Err(format!(
+         "Button variant and size stores are ambiguous ({:x?})",
+         &ranked[..ranked.len().min(4)]
+      )),
    }
 }
 
@@ -1437,9 +1729,12 @@ pub fn gpui_layouts(image: &Image<'_>, gpui: &Gpui) -> Found<GpuiLayout> {
       return Err("Button on_click sits past the Button".to_owned());
    }
    let (variant, scale) = button_style_fields(image, gpui.button_new, button_size)?;
-   check("Button::new", gpui.button_new, button_size, &[
-      on_click, variant, scale,
-   ])?;
+   check(
+      "Button::new",
+      gpui.button_new,
+      button_size,
+      &[on_click, variant, scale],
+   )?;
    let button = ButtonLayout {
       size: button_size,
       on_click,
@@ -1470,7 +1765,7 @@ pub fn gpui_layouts(image: &Image<'_>, gpui: &Gpui) -> Found<GpuiLayout> {
 
 /// `MessageRow::render`, and where its message keeps the id.
 pub struct MessageRow {
-   pub func:          usize,
+   pub func: usize,
    pub msg_id_offset: usize,
 }
 
@@ -1478,11 +1773,16 @@ pub struct MessageRow {
 pub fn message_row(image: &Image<'_>) -> Found<MessageRow> {
    /// `lea rax, [rcx + disp32]`, the id the template formats.
    const MSG_ID_LEA: Pattern = Pattern::new("48 8D 81 ?? ?? ?? ??");
-   let anchor = one(
-      "message-content template",
-      &image.find_bytes(b"\x10message-content-\xc0\x00"),
-   )?;
-   let leas = lea_refs(image, anchor);
+   let anchors = image.find_bytes(b"\x10message-content-\xc0\x00");
+   if anchors.is_empty() {
+      return Err("message-content template not found".to_owned());
+   }
+   let mut leas: Vec<usize> = lea_refs_many(image, &anchors)
+      .into_values()
+      .flatten()
+      .collect();
+   leas.sort_unstable();
+   leas.dedup();
    if leas.is_empty() {
       return Err("nothing loads the message-content template".to_owned());
    }
@@ -1524,8 +1824,9 @@ pub fn message_row(image: &Image<'_>) -> Found<MessageRow> {
 
 /// `build_message_body`, and where its message and row colors sit.
 pub struct MessageBody {
-   pub func:              usize,
-   pub msg_id_offset:     usize,
+   pub func: usize,
+   pub prologue: Prologue,
+   pub msg_id_offset: usize,
    pub row_colors_offset: usize,
 }
 
@@ -1539,15 +1840,22 @@ pub fn message_body(image: &Image<'_>, render_row: usize) -> Found<MessageBody> 
       "message-edited template",
       &image.find_bytes(b"\x0fmessage-edited-\xc0\x00"),
    )?;
+   let known = prologues(image);
+   let match_body_prologue = |func: usize| {
+      [known.row, known.frame]
+         .into_iter()
+         .find(|pro| pro.at(image, func))
+   };
    let mut found = lea_refs(image, anchor)
       .into_iter()
       .filter_map(|lea| Some(image.function_bounds(lea)?.0))
-      .filter(|&func| prologues(image).row.at(image, func))
+      .filter(|&func| match_body_prologue(func).is_some())
       .filter(|&func| callers(image, func).contains(&render_row))
       .collect::<Vec<_>>();
    found.sort_unstable();
    found.dedup();
    let func = one("message body builder", &found)?;
+   let prologue = match_body_prologue(func).ok_or("message body prologue changed")?;
    let head = image
       .read(func, 0x120)
       .ok_or("message body builder is unmapped")?;
@@ -1575,6 +1883,7 @@ pub fn message_body(image: &Image<'_>, render_row: usize) -> Found<MessageBody> 
       .ok_or("message body row colors not found")?;
    Ok(MessageBody {
       func,
+      prologue,
       msg_id_offset,
       row_colors_offset,
    })
@@ -1689,40 +1998,38 @@ pub fn staff(image: &Image<'_>) -> Found<StaffField> {
       {
          Ok(direct)
       },
-      _ => {
-         Err(format!(
-            "staff flag reads disagree ({} variants)",
-            found.len()
-         ))
-      },
+      _ => Err(format!(
+         "staff flag reads disagree ({} variants)",
+         found.len()
+      )),
    }
 }
 
 /// `MessageContextMenu` builder and native `MenuItem` helpers for injecting
 /// `phoenix.ui.addMessageAction` entries into right-click and `...` menus.
 pub struct MessageContextMenu {
-   pub build_fn:          usize,
-   pub msg_ptr_offset:    usize,
-   pub msg_id_offset:     usize,
+   pub build_fn: usize,
+   pub msg_ptr_offset: usize,
+   pub msg_id_offset: usize,
    pub channel_id_offset: usize,
-   pub props_new:         usize,
-   pub with_id:           usize,
-   pub with_icon:         usize,
-   pub with_color:        usize,
-   pub vec_push:          usize,
-   pub layout:            MenuLayout,
+   pub props_new: usize,
+   pub with_id: usize,
+   pub with_icon: usize,
+   pub with_color: usize,
+   pub vec_push: usize,
+   pub layout: MenuLayout,
 }
 
 /// `MenuItem` and its `Action` variant.
 #[derive(Debug, Clone, Copy)]
 pub struct MenuLayout {
-   pub size:         usize,
+   pub size: usize,
    /// `MenuItemProps` inside `MenuItem::Action`.
-   pub props:        usize,
-   pub props_size:   usize,
-   pub action_tag:   u64,
+   pub props: usize,
+   pub props_size: usize,
+   pub action_tag: u64,
    /// The click handler `Rc<dyn Fn>`, and the word before it Discord zeroes.
-   pub on_click:     usize,
+   pub on_click: usize,
    pub on_click_tag: usize,
 }
 
@@ -1755,9 +2062,11 @@ fn number(register: Register) -> u8 {
    ext << 3 | low
 }
 
-/// Locates `MessageContextMenu`'s item list builder (`build_fn`), the
-/// `message_id` / `channel_id` offsets in its input, and the `MenuItem`
-/// builders (`props_new`, `with_id`, `with_icon`, `with_color`, `vec_push`).
+/// Locates `MessageContextMenu`'s item list builder (`build_fn`).
+///
+/// Also resolves the `message_id` / `channel_id` offsets in its input and the
+/// `MenuItem` builders (`props_new`, `with_id`, `with_icon`, `with_color`,
+/// `vec_push`).
 #[expect(
    clippy::too_many_lines,
    reason = "cross-checks both Copy Message ID and Delete Message menu blocks"
@@ -2001,31 +2310,31 @@ fn string_leas(image: &Image<'_>, needles: &[&[u8]]) -> HashMap<usize, Vec<usize
 /// scrolling), GPUI's `WM_USER+5` force-redraw validation-number offset, and
 /// the backdrop's click-outside wiring.
 pub struct Modal {
-   pub overlay_render:           usize,
-   pub vec_push_any:             usize,
-   pub modal_new:                usize,
-   pub modal_into_any:           usize,
-   pub modal_child_div:          usize,
-   pub modal_footer_button:      usize,
-   pub div_id:                   usize,
+   pub overlay_render: usize,
+   pub vec_push_any: usize,
+   pub modal_new: usize,
+   pub modal_into_any: usize,
+   pub modal_child_div: usize,
+   pub modal_footer_button: usize,
+   pub div_id: usize,
    pub window_validation_offset: usize,
-   pub dismiss:                  Dismiss,
-   pub layout:                   ModalLayout,
+   pub dismiss: Dismiss,
+   pub layout: ModalLayout,
 }
 
 /// `mana_html::hosted::modal::Modal`.
 #[derive(Debug, Clone, Copy)]
 pub struct ModalLayout {
-   pub size:     usize,
+   pub size: usize,
    /// `Vec<AnyElement>` of body children and of footer buttons.
    pub children: usize,
-   pub footer:   usize,
+   pub footer: usize,
    /// `Option<SharedString>`.
    pub subtitle: usize,
    /// `Option<Rc<dyn Fn(&mut Window, &mut App)>>`.
    pub on_close: usize,
    /// The `ModalSize` field.
-   pub scale:    usize,
+   pub scale: usize,
 }
 
 /// What Discord's overlay `backdrop` uses to close on a press outside the
@@ -2039,11 +2348,11 @@ pub struct Dismiss {
    /// `Interactivity` offset of the mouse-down listener `Vec`.
    pub mouse_down_listeners: usize,
    /// `Vec<Box<dyn ..>>::push(vec, data, vtable)`.
-   pub listener_push:        usize,
+   pub listener_push: usize,
    /// `Hitbox::is_hovered(&Hitbox, &Window) -> bool`.
-   pub hitbox_is_hovered:    usize,
+   pub hitbox_is_hovered: usize,
    /// `App` offset of `propagate_event`.
-   pub propagate_event:      usize,
+   pub propagate_event: usize,
 }
 
 /// Locates `Workspace::render_overlays` (`nav-overlay-popout-layer`), `Modal`
@@ -2061,13 +2370,16 @@ pub fn modal(image: &Image<'_>, div_into_any: usize, div: &DivLayout) -> Found<M
    // `Vec` is not the footer's.
    const MODAL_TYPE: &[u8] = b"mana_html::hosted::modal::Modal";
    const BUTTON_TYPE: &[u8] = b"mana_gpui::components::button::Button";
-   let leas = string_leas(image, &[
-      b"nav-overlay-popout-layer",
-      b"mana-modal",
-      MODAL_TYPE,
-      BUTTON_TYPE,
-      b"game-server-shop-carousel",
-   ]);
+   let leas = string_leas(
+      image,
+      &[
+         b"nav-overlay-popout-layer",
+         b"mana-modal",
+         MODAL_TYPE,
+         BUTTON_TYPE,
+         b"game-server-shop-carousel",
+      ],
+   );
    let leas_of = |addr: usize| leas.get(&addr).cloned().unwrap_or_default();
 
    let overlay_str = one(
@@ -2172,15 +2484,13 @@ pub fn modal(image: &Image<'_>, div_into_any: usize, div: &DivLayout) -> Found<M
 
    // `Div::id` is the first call after `lea` of `"game-server-shop-carousel"`,
    // checking `ElementId::None` in `Interactivity` (`cmp byte ptr [rcx +
-   // disp32], 0xff`).
-   let carousel = one(
-      "game-server-shop-carousel",
-      &image.find_bytes(b"game-server-shop-carousel"),
-   )?;
-   // `Div::id(div, id)` takes the id string as its third argument.
+   // disp32], 0xff`). Multiple CGUs may duplicate the literal, so filter loads
+   // by `Div::id`'s third-argument register across all copies.
    let abi = Abi::of(image);
-   let carousel_leas: Vec<usize> = leas_of(carousel)
+   let carousel_leas: Vec<usize> = image
+      .find_bytes(b"game-server-shop-carousel")
       .into_iter()
+      .flat_map(&leas_of)
       .filter(|&lea| image.read(lea, 3) == Some(&lea_rip(abi.arg(2))[..]))
       .collect();
    let carousel_lea = one("game-server-shop-carousel load", &carousel_leas)?;
@@ -2234,10 +2544,10 @@ pub struct WaylandFrame {
    /// `WaylandWindowStatePtr::frame(&window, requested, force)`, which hands
    /// the window's `request_frame` callback `state + force_render` as its
    /// `force_render`.
-   pub frame:        usize,
+   pub frame: usize,
    pub force_render: usize,
    /// calloop's `Ping::ping(&ping)`, safe from any thread.
-   pub ping:         usize,
+   pub ping: usize,
 }
 
 /// Locates [`WaylandFrame`] from `frame`'s start and the `request_frame` that
@@ -2296,12 +2606,10 @@ fn clear_winner(what: &str, ranked: &[(usize, usize)], margin: usize) -> Found<u
       [(top, value), rest @ ..] if rest.first().is_none_or(|&(next, _)| *top >= margin * next) => {
          Ok(*value)
       },
-      _ => {
-         Err(format!(
-            "{what} is ambiguous ({:x?})",
-            &ranked[..ranked.len().min(4)]
-         ))
-      },
+      _ => Err(format!(
+         "{what} is ambiguous ({:x?})",
+         &ranked[..ranked.len().min(4)]
+      )),
    }
 }
 
@@ -2569,41 +2877,41 @@ fn on_mouse_down_shape(
 /// Native Mana/GPUI `FieldState`, `TextInput`, and `TextArea` bindings for
 /// in-app URL entry and plugin code editing.
 pub struct TextFields {
-   pub cx_new_single:       usize,
-   pub cx_new_multiline:    usize,
-   pub entity_map_get:      usize,
-   pub entity_downgrade:    usize,
-   pub weak_drop:           usize,
-   pub text_get:            usize,
-   pub set_value:           usize,
-   pub update_entity_dyn:   usize,
-   pub arc_drop_slow:       usize,
-   pub text_input_new:      usize,
+   pub cx_new_single: usize,
+   pub cx_new_multiline: usize,
+   pub entity_map_get: usize,
+   pub entity_downgrade: usize,
+   pub weak_drop: usize,
+   pub text_get: usize,
+   pub set_value: usize,
+   pub update_entity_dyn: usize,
+   pub arc_drop_slow: usize,
+   pub text_input_new: usize,
    pub text_input_into_any: usize,
-   pub text_area_new:       usize,
-   pub text_area_into_any:  usize,
-   pub layout:              FieldLayout,
+   pub text_area_new: usize,
+   pub text_area_into_any: usize,
+   pub layout: FieldLayout,
 }
 
 /// Mana `FieldState`, the hosted `TextInput` and `TextArea` built on it, and
 /// the GPUI handles they go through.
 #[derive(Debug, Clone, Copy)]
 pub struct FieldLayout {
-   pub text_input_size:   usize,
+   pub text_input_size: usize,
    pub text_input_entity: usize,
-   pub text_area_size:    usize,
-   pub text_area_entity:  usize,
+   pub text_area_size: usize,
+   pub text_area_entity: usize,
    /// `TextArea`'s `min_rows: Option<u8>`, with `max_rows` 2 bytes on, or
    /// `None` when `TextArea::new` no longer shows them.
-   pub text_area_rows:    Option<usize>,
+   pub text_area_rows: Option<usize>,
    /// `FieldState`'s `Option<SharedString>` slots: the two placeholders and
    /// the value `set_value` clears.
-   pub placeholders:      [usize; 2],
-   pub pending_value:     usize,
+   pub placeholders: [usize; 2],
+   pub pending_value: usize,
    /// `App`'s `EntityMap`.
-   pub app_entities:      usize,
+   pub app_entities: usize,
    /// The `Weak` inside a `WeakEntity`, what `weak_drop` takes a pointer to.
-   pub weak_ptr:          usize,
+   pub weak_ptr: usize,
 }
 
 /// `FieldState::new(out, a, b)` and `new_multiline`, thunks that pass their
@@ -2615,33 +2923,29 @@ fn field_state_new(image: &Image<'_>, abi: Abi) -> Found<(usize, usize, usize)> 
    /// Thunk patterns and where the call or jump to the inner function sits.
    type Thunks<'a> = &'a [(Pattern, usize)];
    let (singles, multis): (Thunks<'_>, Thunks<'_>) = match abi {
-      Abi::Win64 => {
-         (
-            &[(
-               Pattern::new("56 48 83 EC 20 4D 89 C1 49 89 D0 48 89 CE 31 D2 E8"),
-               16,
-            )],
-            &[(
-               Pattern::new("56 48 83 EC 20 4D 89 C1 49 89 D0 48 89 CE B2 01 E8"),
-               16,
-            )],
-         )
-      },
-      Abi::SysV => {
-         (
-            &[
-               (Pattern::new("48 89 D1 48 89 F2 31 F6"), 8),
-               (Pattern::new("53 48 89 D1 48 89 F2 48 89 FB 31 F6"), 12),
-            ],
-            &[
-               (Pattern::new("48 89 D1 48 89 F2 6A 01 5E"), 9),
-               (
-                  Pattern::new("53 48 89 D1 48 89 F2 48 89 FB BE 01 00 00 00"),
-                  15,
-               ),
-            ],
-         )
-      },
+      Abi::Win64 => (
+         &[(
+            Pattern::new("56 48 83 EC 20 4D 89 C1 49 89 D0 48 89 CE 31 D2 E8"),
+            16,
+         )],
+         &[(
+            Pattern::new("56 48 83 EC 20 4D 89 C1 49 89 D0 48 89 CE B2 01 E8"),
+            16,
+         )],
+      ),
+      Abi::SysV => (
+         &[
+            (Pattern::new("48 89 D1 48 89 F2 31 F6"), 8),
+            (Pattern::new("53 48 89 D1 48 89 F2 48 89 FB 31 F6"), 12),
+         ],
+         &[
+            (Pattern::new("48 89 D1 48 89 F2 6A 01 5E"), 9),
+            (
+               Pattern::new("53 48 89 D1 48 89 F2 48 89 FB BE 01 00 00 00"),
+               15,
+            ),
+         ],
+      ),
    };
    let inner = |at: usize| {
       let code = image.read(at, 6)?;
@@ -2798,14 +3102,9 @@ pub fn text_fields(image: &Image<'_>) -> Found<TextFields> {
       return Err("cx.new single/multiline helpers disagree".to_owned());
    }
 
-   // Set C: every function referencing any copy of the `RichTextState` "read"
-   // panic string (may appear in multiple CGUs).
-   // COFF merges the panic's verb into the type name's literal, ELF loads the
-   // bare name.
-   let read_panic = match abi {
-      Abi::Win64 => READ_PANIC,
-      Abi::SysV => &READ_PANIC[b"read".len()..],
-   };
+   // Set C: every function referencing any copy of the `RichTextState` type
+   // name across CGUs.
+   let read_panic = &READ_PANIC[b"read".len()..];
    let leas = string_leas(image, &[read_panic, TEXT_INPUT_TYPE, TEXT_AREA_TYPE]);
    let read_panics = image.find_bytes(read_panic);
    if read_panics.is_empty() {
@@ -3168,7 +3467,7 @@ pub fn media_fetch(image: &Image<'_>) -> Found<usize> {
 #[derive(Clone, Copy, Debug)]
 pub struct MessageJson {
    /// `fn(out: *mut Result<Value, Error>, message: *const Message)`.
-   pub to_value:   usize,
+   pub to_value: usize,
    /// `fn(value: *mut Value)`.
    pub drop_value: usize,
 }
@@ -3239,6 +3538,544 @@ pub fn message_json(image: &Image<'_>) -> Found<MessageJson> {
    })
 }
 
+/// Locates `libdiscord`'s typing-start operation (`ops/typing.rs`).
+///
+/// The function acquires the typing state mutex, emits the local typing-start
+/// event that renders local typing dots, and spawns a boxed future whose `poll`
+/// method references a `Location` for `ops/typing.rs` (forward slash on Linux,
+/// backslash on Windows). Walking from that `Location` to the future's `poll`
+/// function, its vtable in data/relro, and the unique `lea` of that vtable
+/// finds the typing-start entry point on both System V and Win64.
+pub fn typing_start(image: &Image<'_>) -> Found<usize> {
+   let mut path_ends: Vec<usize> = image
+      .find_bytes(b"ops/typing.rs")
+      .into_iter()
+      .chain(image.find_bytes(b"ops\\typing.rs"))
+      .map(|hit| hit + 13)
+      .collect();
+   path_ends.sort_unstable();
+   path_ends.dedup();
+   if path_ends.is_empty() {
+      return Err("ops/typing.rs path string not found".to_owned());
+   }
+
+   // Find every static `(ptr, len)` pair in non-executable segments ending at
+   // one of those `ops/typing.rs` paths (covers `core::panic::Location` and
+   // `tracing` metadata without assuming a leading NUL or repo prefix).
+   let mut locs: Vec<usize> = Vec::new();
+   for seg in image.segments.iter().filter(|s| !s.executable) {
+      let mut off = 0;
+      while off + 16 <= seg.bytes.len() {
+         let slot = seg.addr + off;
+         if let (Some(ptr), Some(len)) = (image.read_usize(slot), image.read_usize(slot + 8))
+            && (13..=256).contains(&len)
+            && let Some(end) = ptr.checked_add(len)
+            && path_ends.binary_search(&end).is_ok()
+         {
+            locs.push(slot);
+         }
+         off += 8;
+      }
+   }
+
+   let leas = lea_index(image);
+   let mut poll_fns: Vec<usize> = locs
+      .into_iter()
+      .flat_map(|loc| leas.sites(loc))
+      .filter_map(|site| Some(image.function_bounds(site)?.0))
+      .collect();
+   poll_fns.sort_unstable();
+   poll_fns.dedup();
+
+   let mut funcs: Vec<usize> = Vec::new();
+   for poll_fn in poll_fns {
+      for slot in image.pointers_to(poll_fn) {
+         let Some(vtable) = slot.checked_sub(0x18) else {
+            continue;
+         };
+         let valid_vtable = image
+            .read_usize(vtable)
+            .is_some_and(|drop_fn| image.is_code(drop_fn))
+            && image
+               .read_usize(vtable + 0x8)
+               .is_some_and(|size| (0x100..=0x1000).contains(&size))
+            && image.read_usize(vtable + 0x10) == Some(8);
+         if !valid_vtable {
+            continue;
+         }
+         for site in leas.sites(vtable) {
+            if let Some((start, _)) = image.function_bounds(site) {
+               funcs.push(start);
+            }
+         }
+      }
+   }
+   funcs.sort_unstable();
+   funcs.dedup();
+   let func = one("typing start", &funcs)?;
+   if !prologues(image).frame.at(image, func) {
+      return Err("typing start prologue changed".to_owned());
+   }
+   Ok(func)
+}
+
+/// Native GPUI `Svg` and Mana `Icon` builders resolved from the composer's own
+/// attach button.
+#[derive(Debug, Clone, Copy)]
+pub struct ComposerSvg {
+   pub caller_loc: usize,
+   /// `gpui::svg(sret, loc) -> sret`.
+   pub svg_new: usize,
+   /// `Svg::path(sret, svg, ptr, len) -> sret`.
+   pub svg_path: usize,
+   /// `Svg::size(sret, svg, px) -> sret`.
+   pub svg_size: usize,
+   /// `Svg::text_color(sret, svg, rgba_u32) -> sret`.
+   pub svg_text_color: usize,
+   /// `Svg::into_any_element(sret, svg) -> sret`.
+   pub svg_into_any: usize,
+   /// `Icon::from_name(ptr, len) -> u16` (`0xFFFF` when unknown).
+   pub icon_from_name: usize,
+   /// Static Mana icon table indexed by `id * 0x50`; `*[entry + 0x10]` holds
+   /// `(ptr, len)` at `+0x18` / `+0x20`.
+   pub icon_table: usize,
+   /// Size of `gpui::Svg` in bytes.
+   pub svg_size_bytes: usize,
+}
+
+/// Chat composer renderer and GPUI element-tree layouts for injecting toolbar
+/// buttons to the left of the emoji picker button.
+#[derive(Debug, Clone, Copy)]
+pub struct Composer {
+   /// `ChatComposer::render(sret, self, channel_id, arg3, window, cx) -> sret`.
+   pub render: usize,
+   /// `Div::id(sret, div, ptr, len) -> sret`.
+   pub div_id: usize,
+   /// Byte offset of `ElementId` inside `Interactivity`.
+   pub element_id_offset: usize,
+   /// Fast-path `Drawable<Div>` vtable and byte offset of `Div` inside it.
+   pub div_vtbl: usize,
+   pub drawable_div_off: usize,
+   /// Fast-path `Drawable<Stateful<Div>>` vtable and `Div` offset inside it.
+   pub stateful_div_vtbl: usize,
+   pub stateful_div_off: usize,
+   /// Fast-path `Drawable<ShakerInner>` vtable and inner `AnyElement` offset.
+   pub shaker_vtbl: usize,
+   pub shaker_any_off: usize,
+   /// Fast-path `Drawable<Transform>` vtable (while shaking) and inner
+   /// `AnyElement` offset.
+   pub transform_vtbl: usize,
+   pub transform_any_off: usize,
+   /// Mouse-down listener plumbing for clickable composer button `Div`s.
+   pub dismiss: Dismiss,
+   /// Optional SVG + Mana Icon builders for vector toolbar icons.
+   pub svg: Option<ComposerSvg>,
+}
+
+/// Follows a single unconditional jump thunk (`jmp rel32` or `jmp [rip+disp]`).
+fn follow_jump(image: &Image<'_>, addr: usize) -> usize {
+   image
+      .read(addr, 8)
+      .and_then(|bytes| jump_target(image, bytes, addr))
+      .filter(|&target| image.is_code(target))
+      .unwrap_or(addr)
+}
+
+/// Decodes a `Drawable<T>` fast-path vtable and the offset of `T` inside
+/// `Drawable<T>` from `T::into_any_element`.
+fn decode_drawable_any(
+   image: &Image<'_>,
+   into_any: usize,
+   inner_size: usize,
+   has_tag_zero: bool,
+) -> Found<(usize, usize)> {
+   let func = follow_jump(image, into_any);
+   let body = image
+      .read(func, 0x200)
+      .ok_or("into_any_element body unreadable")?;
+   // Fast path writes `AnyElement.vtable` at `[sret + 0x10]`:
+   // `lea rax, [rip + vtbl]; mov qword ptr [sret + 0x10], rax`.
+   let mut vtbl_hit = None;
+   for pos in 0..body.len().saturating_sub(11) {
+      if body[pos..pos + 3] == [0x48, 0x8D, 0x05]
+         && (body[pos + 7] == 0x48 || body[pos + 7] == 0x49)
+         && body[pos + 8] == 0x89
+         && (body[pos + 9] & 0xF8) == 0x40
+         && body[pos + 10] == 0x10
+         && let Some(target) = rel32_target(image, func + pos + 3)
+         && !image.is_code(target)
+      {
+         vtbl_hit = Some((pos, target));
+         break;
+      }
+   }
+   let (pos, vtbl) = vtbl_hit.ok_or("into_any_element vtable store not found")?;
+   if !has_tag_zero {
+      return Ok((vtbl, 0));
+   }
+   // The fallback call right after the fast-path `jmp` (before `ret`, after
+   // any `memcpy` on Win64) constructs `Drawable<T>` directly: writes tag `0`
+   // at `[dst]` and copies `total - 1` bytes to `[dst + 1]`, placing `T` at
+   // the tail (`total - inner_size`).
+   let after = &body[pos + 11..];
+   let ret_rel = after.iter().position(|&b| b == 0xC3).unwrap_or(after.len());
+   let fallback = calls_in(image, func + pos + 11, ret_rel)
+      .last()
+      .ok_or("into_any_element fallback call not found")?
+      .1;
+   let fb_body = image
+      .read(fallback, 0x260)
+      .ok_or("into_any_element fallback body unreadable")?;
+   let mut offset = None;
+   for at in 0..fb_body.len().saturating_sub(8) {
+      let tag_zero = fb_body[at..at + 3] == [0xC6, 0x00, 0x00]
+         || fb_body[at..at + 3] == [0xC6, 0x07, 0x00]
+         || fb_body[at..at + 5] == [0x41, 0xC6, 0x04, 0x24, 0x00];
+      if !tag_zero {
+         continue;
+      }
+      let window = &fb_body[at..fb_body.len().min(at + 0x24)];
+      for w in 0..window.len().saturating_sub(6) {
+         let imm = if window[w] == 0xBA {
+            Some(u32::from_le_bytes(
+               window[w + 1..w + 5].try_into().unwrap_or([0; 4]),
+            ))
+         } else if window[w] == 0x41 && window[w + 1] == 0xB8 {
+            Some(u32::from_le_bytes(
+               window[w + 2..w + 6].try_into().unwrap_or([0; 4]),
+            ))
+         } else {
+            None
+         };
+         if let Some(copy_len) = imm {
+            let total = (copy_len as usize) + 1;
+            if total > inner_size && total <= 0x400 {
+               offset = Some(total - inner_size);
+               break;
+            }
+         }
+      }
+      if offset.is_some() {
+         break;
+      }
+   }
+   let off = offset.ok_or("Drawable<T> inner offset did not decode")?;
+   Ok((vtbl, off))
+}
+
+/// Decodes `ElementId`'s offset inside `Interactivity` from `Div::id`'s
+/// `cmp byte ptr [reg + disp32], 0xff` (`ElementId::None`) check.
+fn decode_element_id_offset(image: &Image<'_>, div_id: usize, max_size: usize) -> Found<usize> {
+   let code = image.read(div_id, 0x200).ok_or("Div::id unreadable")?;
+   for w in code.windows(7) {
+      if w[0] == 0x80 && w[1] & 0xF8 == 0xB8 && !matches!(w[1] & 7, 4 | 5) && w[6] == 0xFF {
+         let off = u32::from_le_bytes([w[2], w[3], w[4], w[5]]) as usize;
+         if (0x100..max_size).contains(&off) {
+            return Ok(off);
+         }
+      }
+   }
+   Err("Div::id element_id offset did not decode".to_owned())
+}
+
+/// Decodes `Icon::svg_path` to find its icon table `lea`, the `ret` after that
+/// `lea`, and the start of the following function past `int3` or `nop` padding.
+fn decode_icon_svg_path(
+   code: &[u8],
+   addr: usize,
+   is_data: impl Fn(usize) -> bool,
+) -> Option<(usize, usize)> {
+   let mut icon_table = None;
+   let mut next_addr = None;
+   for line in phoenix_hook::x86::disasm(code, addr, 0x40) {
+      if let Some(cur) = next_addr {
+         if line.text == "int3" || line.text == "nop" || line.text.starts_with("nop ") {
+            next_addr = Some(line.addr + line.len);
+            continue;
+         }
+         next_addr = Some(cur);
+         break;
+      }
+      if icon_table.is_none()
+         && line.text.starts_with("lea ")
+         && let Some(target) = line.target
+         && is_data(target)
+      {
+         icon_table = Some(target);
+      } else if line.text == "ret" {
+         icon_table?;
+         next_addr = Some(line.addr + line.len);
+      }
+   }
+   let icon_table = icon_table?;
+   let icon_from_name = next_addr?;
+   (icon_from_name < addr + code.len()).then_some((icon_table, icon_from_name))
+}
+
+/// Resolves `gpui::svg` and Mana's `Icon` lookup table from the composer's
+/// `"ta-attach"` icon button.
+fn locate_composer_svg(image: &Image<'_>, abi: Abi, attach_leas: &[usize]) -> Option<ComposerSvg> {
+   // `gpui::svg()` initializes three `Option<SharedString>` tags at +0x500,
+   // +0x518 and +0x530 to `0xff` (`c6 ?? 00 05 00 00 ff`).
+   let is_svg_new = |addr: usize| -> bool {
+      image.read(addr, 0x50).is_some_and(|body| {
+         body.windows(7).any(|w| {
+            w[0] == 0xC6 && (w[1] & 0xF8) == 0x80 && w[2..7] == [0x00, 0x05, 0x00, 0x00, 0xFF]
+         })
+      })
+   };
+   let is_icon_svg_path = |addr: usize| -> bool {
+      image.read(addr, 0x20).is_some_and(|body| {
+         body.starts_with(&[0x0F, 0xB7]) && body.windows(4).any(|w| w == [0x48, 0x6B, 0xC0, 0x50])
+      })
+   };
+   for &lea in attach_leas {
+      let before = calls_in(image, lea.checked_sub(0x100)?, 0x100);
+      let after = calls_in(image, lea, 0x80);
+      if before.len() < 5 || after.len() < 2 {
+         continue;
+      }
+      let Some(svg_idx) = before.iter().rposition(|&(_, callee)| is_svg_new(callee)) else {
+         continue;
+      };
+      let (svg_new_call, svg_new) = before[svg_idx];
+      let caller_loc = arg1_lea_before(image, abi, svg_new_call)?;
+
+      // On Win64 `Icon::svg_path` is a leaf function without a `.pdata` entry
+      // starting with `0f b7 c1`, so `calls_in` may omit it. Scan raw calls
+      // right after `svg_new` to find it on both ABIs.
+      let tail = &before[svg_idx + 1..];
+      let non_icon: Vec<(usize, usize)> = tail
+         .iter()
+         .copied()
+         .filter(|&(_, callee)| !is_icon_svg_path(callee))
+         .collect();
+      if non_icon.len() < 4 {
+         continue;
+      }
+      let (svg_path_call, svg_path) = non_icon[0];
+      let svg_size = non_icon[non_icon.len() - 2].1;
+      let svg_text_color = non_icon[non_icon.len() - 1].1;
+      let svg_into_any = calls_in(image, after[1].1, 0x40).first()?.1;
+
+      let scan_start = svg_new_call + 5;
+      let scan_len = svg_path_call.checked_sub(scan_start)?;
+      let raw = image.read(scan_start, scan_len)?;
+      let icon_svg_path = (0..raw.len()).find_map(|off| {
+         let (_, target) = call_target(image, &raw[off..], scan_start + off)?;
+         is_icon_svg_path(target).then_some(target)
+      })?;
+
+      // `Icon::svg_path` loads the icon table with a RIP-relative `lea` and
+      // ends at `ret`; `Icon::from_name` follows after alignment padding and
+      // references the same icon table.
+      let Some(path_code) = image.read(icon_svg_path, 0x40) else {
+         continue;
+      };
+      let Some((icon_table, icon_from_name)) =
+         decode_icon_svg_path(path_code, icon_svg_path, |target| !image.is_code(target))
+      else {
+         continue;
+      };
+      if image
+         .function_bounds(icon_from_name)
+         .is_none_or(|(start, _)| start != icon_from_name)
+      {
+         continue;
+      }
+      let Some(from_code) = image.read(icon_from_name, 0xC0) else {
+         continue;
+      };
+      if !rip_leas(from_code, icon_from_name).any(|(_, target)| target == icon_table) {
+         continue;
+      }
+
+      // `Svg::size` copies `Svg` (`mov r8d/edx, svg_size_bytes`) into `sret`.
+      let size_code = image.read(svg_size, 0x50)?;
+      let svg_size_bytes = (0..size_code.len().saturating_sub(6)).find_map(|i| {
+         let val = if size_code[i] == 0x41 && size_code[i + 1] == 0xB8 {
+            u32::from_le_bytes(size_code[i + 2..i + 6].try_into().ok()?) as usize
+         } else if size_code[i] == 0xBA {
+            u32::from_le_bytes(size_code[i + 1..i + 5].try_into().ok()?) as usize
+         } else {
+            return None;
+         };
+         (0x400..=layout::SCRATCH_CAP).contains(&val).then_some(val)
+      })?;
+
+      return Some(ComposerSvg {
+         caller_loc,
+         svg_new,
+         svg_path,
+         svg_size,
+         svg_text_color,
+         svg_into_any,
+         icon_from_name,
+         icon_table,
+         svg_size_bytes,
+      });
+   }
+   None
+}
+
+/// Locates Desktop Phoenix's chat composer render function, its GPUI
+/// `AnyElement` wrapper vtables/offsets, click listener plumbing, and optional
+/// SVG/Icon builders for `phoenix.ui.addComposerButton`.
+#[expect(
+   clippy::too_many_lines,
+   reason = "one locator block per composer symbol and vtable"
+)]
+pub fn composer(image: &Image<'_>, gpui: &Gpui, div: &DivLayout) -> Found<Composer> {
+   let abi = Abi::of(image);
+   let leas = string_leas(
+      image,
+      &[
+         b"nav-overlay-popout-layer",
+         b"emoji-tooltip",
+         b"composer-area",
+         b"composer-shaker",
+         b"ta-attach",
+      ],
+   );
+   let leas_of = |needle: &[u8]| -> Vec<usize> {
+      image
+         .find_bytes(needle)
+         .into_iter()
+         .flat_map(|addr| leas.get(&addr).cloned().unwrap_or_default())
+         .collect()
+   };
+
+   // Mouse-down listener plumbing from `Workspace::render_overlays`'s backdrop.
+   let overlay_lea = one(
+      "nav-overlay-popout-layer load",
+      &leas_of(b"nav-overlay-popout-layer"),
+   )?;
+   let (overlay_render, overlay_end) = image
+      .function_bounds(overlay_lea)
+      .ok_or("Workspace::render_overlays has no unwind entry")?;
+   let dismiss = backdrop_dismiss(image, overlay_render, overlay_end, div)?;
+
+   // Composer renderer contains `emoji-tooltip`, `composer-area`,
+   // `composer-shaker`, and `ta-attach`.
+   let shaker_leas = leas_of(b"composer-shaker");
+   let area_leas = leas_of(b"composer-area");
+   let attach_leas = leas_of(b"ta-attach");
+   let mut candidates: Vec<(usize, usize, usize)> = Vec::new();
+   for emoji_lea in leas_of(b"emoji-tooltip") {
+      let Some((start, end)) = image.function_bounds(emoji_lea) else {
+         continue;
+      };
+      let in_fn = |site: usize| (start..end).contains(&site);
+      if shaker_leas.iter().copied().any(in_fn)
+         && area_leas.iter().copied().any(in_fn)
+         && attach_leas.iter().copied().any(in_fn)
+         && !candidates.iter().any(|&(s, ..)| s == start)
+      {
+         candidates.push((start, end, emoji_lea));
+      }
+   }
+   let (render, render_end, emoji_lea) = one("chat composer render", &candidates)?;
+   if !prologues(image).row.at(image, render) {
+      return Err("chat composer render prologue changed".to_owned());
+   }
+
+   let div_id = calls_in(image, emoji_lea, 0x30)
+      .first()
+      .ok_or("Div::id call at emoji-tooltip not found")?
+      .1;
+   let element_id_offset = decode_element_id_offset(image, div_id, div.interactivity_size)?;
+
+   let area_lea = one(
+      "composer-area load",
+      &area_leas
+         .into_iter()
+         .filter(|&site| (render..render_end).contains(&site))
+         .collect::<Vec<_>>(),
+   )?;
+   let before_area = calls_in(image, area_lea.saturating_sub(0x140), 0x140);
+   let div_new_idx = before_area
+      .iter()
+      .rposition(|&(_, callee)| callee == gpui.div_new)
+      .filter(|&idx| idx >= 2)
+      .ok_or("Stateful<Div>::into_any_element before composer-area not found")?;
+   let stateful_into_any = before_area[div_new_idx - 2].1;
+   let (stateful_div_vtbl, stateful_div_off) =
+      decode_drawable_any(image, stateful_into_any, div.size, true)?;
+
+   // `composer-shaker` wraps the inner composer box in a 0x50-byte element
+   // (and in a 0x80-byte `Transform` whose inner `AnyElement` sits at +0x08
+   // during error shakes), and the outer `Div` converts to `sret` via
+   // `Div::into_any_element` immediately after pushing the shaker.
+   let shaker_lea = one(
+      "composer-shaker load",
+      &shaker_leas
+         .into_iter()
+         .filter(|&site| (render..render_end).contains(&site))
+         .collect::<Vec<_>>(),
+   )?;
+   let after_shaker = calls_in(image, shaker_lea, 0x110);
+   if after_shaker.len() < 3 {
+      return Err("composer-shaker call sequence changed".to_owned());
+   }
+   let (div_vtbl, drawable_div_off) = after_shaker[2..]
+      .iter()
+      .find_map(|&(_, callee)| decode_drawable_any(image, callee, div.size, true).ok())
+      .or_else(|| decode_drawable_any(image, gpui.div_into_any, div.size, true).ok())
+      .ok_or("Div::into_any_element after composer-shaker not found")?;
+   if stateful_div_vtbl == div_vtbl {
+      return Err("Stateful<Div> vtable matched Div vtable".to_owned());
+   }
+   let shaker_fn = after_shaker[1].1;
+   let (sh_start, sh_end) = image
+      .function_bounds(shaker_fn)
+      .ok_or("composer-shaker helper has no unwind entry")?;
+   let sh_body = image
+      .read(sh_start, sh_end - sh_start)
+      .ok_or("composer-shaker helper unreadable")?;
+   let sh_ret = sh_body
+      .iter()
+      .position(|&b| b == 0xC3)
+      .unwrap_or(sh_body.len());
+   let sh_calls = calls_in(image, sh_start, sh_ret);
+   let (Some(&(_, shaker_wrap)), Some(&(_, transform_wrap))) = (sh_calls.first(), sh_calls.last())
+   else {
+      return Err("composer-shaker inner calls missing".to_owned());
+   };
+   let shaker_into_any = calls_in(image, shaker_wrap, 0x40)
+      .first()
+      .ok_or("ShakerInner::into_any_element not found")?
+      .1;
+   let (shaker_vtbl, shaker_any_off) = decode_drawable_any(image, shaker_into_any, 0x50, true)?;
+   let transform_into_any = calls_in(image, transform_wrap, 0x80)
+      .first()
+      .ok_or("Transform::into_any_element not found")?
+      .1;
+   let (transform_vtbl, _) = decode_drawable_any(image, transform_into_any, 0x80, false)?;
+   let transform_any_off = 0x8;
+
+   let in_render_attach: Vec<usize> = attach_leas
+      .into_iter()
+      .filter(|&site| (render..render_end).contains(&site))
+      .collect();
+   let svg = locate_composer_svg(image, abi, &in_render_attach);
+
+   Ok(Composer {
+      render,
+      div_id,
+      element_id_offset,
+      div_vtbl,
+      drawable_div_off,
+      stateful_div_vtbl,
+      stateful_div_off,
+      shaker_vtbl,
+      shaker_any_off,
+      transform_vtbl,
+      transform_any_off,
+      dismiss,
+      svg,
+   })
+}
+
 /// Each `lea r64, [rip + disp32]` in `code` mapped at `addr`, as (instruction,
 /// target).
 fn rip_leas(code: &[u8], addr: usize) -> impl Iterator<Item = (usize, usize)> + '_ {
@@ -3254,4 +4091,55 @@ fn rip_leas(code: &[u8], addr: usize) -> impl Iterator<Item = (usize, usize)> + 
          (addr + pos + 6).checked_add_signed(disp as isize)?,
       ))
    })
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   #[test]
+   fn decode_icon_svg_path_ignores_c3_in_disp_and_skips_padding() {
+      let base: usize = 0x1000_0000;
+      // movzx eax, cx; imul rax, rax, 0x50; lea rcx, [rip + 0x0012c300];
+      // mov rax, [rcx + rax]; ret; int3; int3; nop; nop dword [rax+rax+0]; push rbp
+      let mut code = vec![
+         0x0F, 0xB7, 0xC1, // movzx eax, cx (3)
+         0x48, 0x6B, 0xC0, 0x50, // imul rax, rax, 0x50 (4)
+         0x48, 0x8D, 0x0D, 0x00, 0xC3, 0x12,
+         0x00, // lea rcx, [rip + 0x12c300] (7, contains 0xC3)
+         0x48, 0x8B, 0x04, 0x01, // mov rax, [rcx + rax] (4)
+         0xC3, // ret (1)
+         0xCC, 0xCC, 0x90, // int3, int3, nop padding (3)
+         0x0F, 0x1F, 0x44, 0x00, 0x00, // 5-byte nop (5)
+         0x55, // push rbp at offset 27
+      ];
+      let expected_table = base + 14 + 0x0012_C300;
+      let expected_next = base + 27;
+      assert_eq!(
+         decode_icon_svg_path(&code, base, |t| t >= base + 0x10_0000),
+         Some((expected_table, expected_next))
+      );
+
+      // Direct adjacent function with zero padding after ret.
+      let tight = [
+         0x48, 0x8D, 0x0D, 0x00, 0x10, 0x00, 0x00, // lea rcx, [rip + 0x1000]
+         0xC3, // ret
+         0x55, // push rbp
+      ];
+      assert_eq!(
+         decode_icon_svg_path(&tight, base, |t| t > base + 0x100),
+         Some((base + 7 + 0x1000, base + 8))
+      );
+
+      // Trailing padding only with no following function bytes must fail.
+      code.pop();
+      assert_eq!(
+         decode_icon_svg_path(&code, base, |t| t >= base + 0x10_0000),
+         None
+      );
+
+      // Ret before any table lea must fail.
+      let early_ret = [0xC3, 0x48, 0x8D, 0x0D, 0x00, 0x10, 0x00, 0x00, 0xC3, 0x55];
+      assert_eq!(decode_icon_svg_path(&early_ret, base, |_| true), None);
+   }
 }

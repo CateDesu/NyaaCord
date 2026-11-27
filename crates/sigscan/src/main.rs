@@ -17,31 +17,15 @@
 //! Addresses are hex at the file's preferred base. One below the base is an
 //! RVA. Every address printed carries its RVA too, for a live process's base.
 
-use std::{
-   collections::HashMap,
-   env,
-   fs,
-};
+use std::{collections::HashMap, env, fs};
 
-use misstep::{
-   OptionExt,
-   ResultExt,
-};
-use phoenix_hook::{
-   image::Image,
-   pattern::Pattern,
-   x86,
-};
+use misstep::{OptionExt, ResultExt};
+use phoenix_hook::{image::Image, pattern::Pattern, x86};
 use phoenix_sigs::{
-   Found,
-   desktop,
-   file::{
-      BinaryFile,
-      Machine,
-   },
+   Found, desktop,
+   file::{BinaryFile, Machine},
    http::DesktopHttpTransport,
-   ios,
-   mobile,
+   ios, mobile,
    registry::GatewayRegistry,
 };
 
@@ -73,13 +57,11 @@ fn main() -> misstep::Result<()> {
    let tools = Tools { image, base };
    match args.get(1).map(String::as_str) {
       None => dump(image),
-      Some("check") => {
-         check(
-            image,
-            parsed.machine(),
-            matches!(parsed, BinaryFile::MachO(_)),
-         )
-      },
+      Some("check") => check(
+         image,
+         parsed.machine(),
+         matches!(parsed, BinaryFile::MachO(_)),
+      ),
       Some("strings") => tools.strings(args.get(2).context(USAGE)?),
       Some("scan") => tools.scan(&args[2..].join(" ")),
       Some("refs") => {
@@ -102,14 +84,12 @@ fn main() -> misstep::Result<()> {
 #[expect(clippy::too_many_lines, reason = "one report per locator")]
 fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()> {
    let mut missed = 0;
-   let mut report = |name: &str, found: Found<String>| {
-      match found {
-         Ok(detail) => println!("ok    {name:<20} {detail}"),
-         Err(why) => {
-            missed += 1;
-            println!("MISS  {name:<20} {why}");
-         },
-      }
+   let mut report = |name: &str, found: Found<String>| match found {
+      Ok(detail) => println!("ok    {name:<20} {detail}"),
+      Err(why) => {
+         missed += 1;
+         println!("MISS  {name:<20} {why}");
+      },
    };
    let at = |addr: usize| format!("{addr:#x}");
    let registry = GatewayRegistry::locate(image).map_err(|err| err.to_string());
@@ -160,18 +140,71 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
                Some((Some(alloc), Some(dealloc))) => {
                   Ok(format!("alloc {}, dealloc {}", at(alloc), at(dealloc)))
                },
-               Some((alloc, dealloc)) => {
-                  Err(format!(
-                     "alloc {}, dealloc {}",
-                     alloc.map_or_else(|| "missing".to_owned(), at),
-                     dealloc.map_or_else(|| "missing".to_owned(), at)
-                  ))
-               },
+               Some((alloc, dealloc)) => Err(format!(
+                  "alloc {}, dealloc {}",
+                  alloc.map_or_else(|| "missing".to_owned(), at),
+                  dealloc.map_or_else(|| "missing".to_owned(), at)
+               )),
                None => Err("no http transport".to_owned()),
             },
          );
          report("settings layer", desktop::settings_layer(image).map(at));
          report("access gate", desktop::access_gate(image).map(at));
+         report("access evaluator", desktop::access_evaluator(image).map(at));
+         let tray_app = desktop::tray_app_name(image);
+         report(
+            "tray app name",
+            tray_app
+               .as_ref()
+               .map(|found| {
+                  format!(
+                     "{} (str {}, len {})",
+                     at(found.slot),
+                     at(found.string),
+                     found.len
+                  )
+               })
+               .map_err(Clone::clone),
+         );
+         if abi == x86::Abi::SysV {
+            report(
+               "sni title",
+               tray_app
+                  .as_ref()
+                  .map_err(|_| "needs tray app name".to_owned())
+                  .and_then(|app| desktop::sni_title(image, *app))
+                  .map(|found| {
+                     format!(
+                        "{} (got {}, clone {})",
+                        at(found.func),
+                        at(found.got_slot),
+                        at(found.clone_fn)
+                     )
+                  }),
+            );
+         } else {
+            report(
+               "tray tooltip",
+               desktop::tray_tooltip(image).map(|found| {
+                  format!(
+                     "{} (prologue {}, string_from {})",
+                     at(found.setter),
+                     found.prologue.len,
+                     found.string_from.map_or_else(|| "none".to_owned(), at),
+                  )
+               }),
+            );
+            report(
+               "tray header",
+               tray_app
+                  .as_ref()
+                  .map_err(|_| "needs tray app name".to_owned())
+                  .and_then(|app| desktop::tray_header(image, app.menu_fn))
+                  .map(|found| {
+                     format!("{} (prologue {})", at(found.menu_push), found.prologue.len)
+                  }),
+            );
+         }
          if abi == x86::Abi::SysV {
             report(
                "wayland frame",
@@ -210,14 +243,12 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
             "gpui builders",
             gpui.as_ref().map_err(Clone::clone).and_then(|gpui| {
                match (gpui.div_push_any, gpui.str_into_any) {
-                  (Some(push), Some(text)) => {
-                     Ok(format!(
-                        "{} (push_any {}, str_into_any {})",
-                        at(gpui.div_new),
-                        at(push),
-                        at(text)
-                     ))
-                  },
+                  (Some(push), Some(text)) => Ok(format!(
+                     "{} (push_any {}, str_into_any {})",
+                     at(gpui.div_new),
+                     at(push),
+                     at(text)
+                  )),
                   (push, text) => Err(format!("push_any {push:x?}, str_into_any {text:x?}")),
                }
             }),
@@ -350,6 +381,33 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
                )
             }),
          );
+         report("typing start", desktop::typing_start(image).map(at));
+         report(
+            "chat composer",
+            gpui
+               .as_ref()
+               .map_err(|_| "needs the builders".to_owned())
+               .and_then(|gpui| {
+                  let layouts = layouts
+                     .as_ref()
+                     .map_err(|_| "needs the layouts".to_owned())?;
+                  desktop::composer(image, gpui, &layouts.div)
+               })
+               .map(|c| {
+                  format!(
+                     "{} (div_id={}, elem_id=+{:#x}, div_off=+{:#x}, shaker_off=+{:#x}, svg={})",
+                     at(c.render),
+                     at(c.div_id),
+                     c.element_id_offset,
+                     c.drawable_div_off,
+                     c.shaker_any_off,
+                     c.svg.map_or_else(
+                        || "none".to_owned(),
+                        |s| format!("ok(sz={:#x})", s.svg_size_bytes)
+                     ),
+                  )
+               }),
+         );
       },
       Machine::Aarch64 if macho => {
          report(
@@ -362,14 +420,15 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
             }),
          );
          let names = ["Networking.request", "@http", "headers"];
-         report("host names", match ios::host_names(image, &names)[..] {
-            [Some(request), Some(http), Some(headers)] => {
-               Ok(format!(
+         report(
+            "host names",
+            match ios::host_names(image, &names)[..] {
+               [Some(request), Some(http), Some(headers)] => Ok(format!(
                   "request {request}, @http {http}, headers {headers}"
-               ))
+               )),
+               ref numbers => Err(format!("{names:?} read as {numbers:?}")),
             },
-            ref numbers => Err(format!("{names:?} read as {numbers:?}")),
-         });
+         );
          report(
             "access gate",
             ios::access_gate(image).map(|[a, b]| format!("{a:#x}, {b:#x}")),
@@ -445,7 +504,7 @@ fn dump(image: &Image<'_>) -> misstep::Result<()> {
 
 struct Tools<'a> {
    image: &'a Image<'a>,
-   base:  usize,
+   base: usize,
 }
 
 impl Tools<'_> {

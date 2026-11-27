@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-compiles a self-contained NyaaCord Windows x86-64 executable with static MSVC CRT.
+# Cross-compiles a self-contained Nyaacord Windows x86-64 executable with static MSVC CRT.
 set -euo pipefail
 
 CALLER_PWD=$PWD
@@ -32,7 +32,7 @@ Options:
   --client <path>       Discord Phoenix Windows setup exe or directory containing Discord.exe
                         (default: DISCORD_PHOENIX_WINDOWS_SETUP or auto-detect)
   --no-client           Build a thin launcher without bundling Discord Phoenix
-  --out <path>          Output executable path (default: dist/NyaaCord-x86_64.exe)
+  --out <path>          Output executable path (default: dist/Nyaacord-x86_64.exe)
   --skip-plugins        Skip esbuild plugin bundling (embed an empty plugin map)
   -h, --help            Show this help message
 EOF
@@ -121,7 +121,7 @@ version=${NYAACORD_VERSION:-}
 client=${DISCORD_PHOENIX_WINDOWS_SETUP:-}
 client_explicit=0
 no_client=0
-out="$ROOT/dist/NyaaCord-x86_64.exe"
+out="$ROOT/dist/Nyaacord-x86_64.exe"
 skip_plugins=0
 
 while [ "$#" -gt 0 ]; do
@@ -450,7 +450,7 @@ if [ "$no_client" = 1 ]; then
    expect_client=0
 fi
 
-echo "Building phoenix-inject (NyaaCord-x86_64.exe, version $version)..."
+echo "Building phoenix-inject (Nyaacord-x86_64.exe, version $version)..."
 (
    cd "$ROOT"
    XWIN_SDK_VERSION="$xwin_sdk_ver" \
@@ -466,13 +466,78 @@ echo "Building phoenix-inject (NyaaCord-x86_64.exe, version $version)..."
 exe_bin="$ROOT/target/$TARGET/release/phoenix-inject.exe"
 [ -f "$exe_bin" ] || { echo "Missing built executable: $exe_bin" >&2; exit 1; }
 
-echo "Verifying PE32+ headers, icon resources, and static CRT imports..."
-python3 - "$dll_bin" "$exe_bin" <<'PY'
+echo "Verifying PE32+ headers, icon and version resources, and static CRT imports..."
+python3 - "$dll_bin" "$exe_bin" "$version" <<'PY'
 import struct, sys
 
 FORBIDDEN_IMPORTS = ("vcruntime140", "msvcp140", "api-ms-win-crt", "ucrtbase")
 
-def inspect_pe(path: str, expect_dll: bool, expect_icon: bool):
+def parse_win32_version(ver: str):
+    core = ver.split("-", 1)[0].split("+", 1)[0]
+    parts = [0, 0, 0, 0]
+    for idx, seg in enumerate(core.split(".")[:4]):
+        try:
+            num = int(seg)
+        except ValueError:
+            num = 0
+        if 0 <= num <= 0xFFFF:
+            parts[idx] = num
+    return tuple(parts)
+
+def read_utf16z(buf: bytes, off: int, limit: int):
+    end = off
+    while end + 2 <= limit and buf[end:end + 2] != b"\x00\x00":
+        end += 2
+    return buf[off:end].decode("utf-16le"), end
+
+def parse_version_blob(blob: bytes):
+    wlen, vlen, _ = struct.unpack_from("<HHH", blob, 0)
+    assert wlen <= len(blob), f"truncated VS_VERSION_INFO ({wlen} > {len(blob)})"
+    key, key_end = read_utf16z(blob, 6, wlen)
+    assert key == "VS_VERSION_INFO", f"unexpected root version key {key!r}"
+    val_off = (key_end + 2 + 3) & ~3
+    assert vlen >= 52 and val_off + vlen <= wlen, "missing VS_FIXEDFILEINFO"
+    sig, _, fv_ms, fv_ls, pv_ms, pv_ls = struct.unpack_from("<IIIIII", blob, val_off)
+    assert sig == 0xFEEF04BD, f"unexpected VS_FIXEDFILEINFO signature {sig:#x}"
+    fixed = (
+        (fv_ms >> 16, fv_ms & 0xFFFF, fv_ls >> 16, fv_ls & 0xFFFF),
+        (pv_ms >> 16, pv_ms & 0xFFFF, pv_ls >> 16, pv_ls & 0xFFFF),
+    )
+
+    strings = {}
+    pos = (val_off + vlen + 3) & ~3
+    while pos + 6 <= wlen:
+        c_len, _, _ = struct.unpack_from("<HHH", blob, pos)
+        if c_len == 0:
+            break
+        c_end = pos + c_len
+        c_key, c_key_end = read_utf16z(blob, pos + 6, c_end)
+        if c_key == "StringFileInfo":
+            t_pos = (c_key_end + 2 + 3) & ~3
+            while t_pos + 6 <= c_end:
+                t_len, _, _ = struct.unpack_from("<HHH", blob, t_pos)
+                if t_len == 0:
+                    break
+                t_end = t_pos + t_len
+                _, t_key_end = read_utf16z(blob, t_pos + 6, t_end)
+                s_pos = (t_key_end + 2 + 3) & ~3
+                while s_pos + 6 <= t_end:
+                    s_len, s_vlen, s_type = struct.unpack_from("<HHH", blob, s_pos)
+                    if s_len == 0:
+                        break
+                    s_end = s_pos + s_len
+                    s_key, s_key_end = read_utf16z(blob, s_pos + 6, s_end)
+                    s_val_off = (s_key_end + 2 + 3) & ~3
+                    if s_type == 1 and s_val_off <= s_end:
+                        s_val_len = min(s_vlen * 2, s_end - s_val_off)
+                        raw_val = blob[s_val_off:s_val_off + s_val_len]
+                        strings[s_key] = raw_val.decode("utf-16le").split("\x00", 1)[0]
+                    s_pos = (s_end + 3) & ~3
+                t_pos = (t_end + 3) & ~3
+        pos = (c_end + 3) & ~3
+    return fixed, strings
+
+def inspect_pe(path: str, expect_dll: bool, expect_resources: bool, expected_version: str):
     data = open(path, "rb").read()
     assert data[:2] == b"MZ", f"{path}: missing MZ header"
     e_lfanew, = struct.unpack_from("<I", data, 60)
@@ -531,52 +596,305 @@ def inspect_pe(path: str, expect_dll: bool, expect_icon: bool):
     assert not bad, f"{path}: forbidden dynamic CRT imports found: {bad} (all: {imports})"
 
     resource_types = []
-    if expect_icon:
+    ver_summary = None
+    if expect_resources:
         assert any(s[0] == ".rsrc" for s in sections), f"{path}: missing .rsrc section"
         assert rsrc_rva and rsrc_size, f"{path}: missing resource data directory"
         rsrc_off = rva_to_off(rsrc_rva)
         assert rsrc_off is not None, f"{path}: could not map .rsrc RVA"
         _, _, _, _, named_entries, id_entries = struct.unpack_from("<IIHHHH", data, rsrc_off)
         ent_off = rsrc_off + 16
+        version_blobs = []
         for _ in range(named_entries + id_entries):
-            rid, _ = struct.unpack_from("<II", data, ent_off)
+            rid, data_or_sub = struct.unpack_from("<II", data, ent_off)
             resource_types.append(rid)
+            if rid == 16 and (data_or_sub & 0x80000000):
+                def collect_leaves(dir_off):
+                    _, _, _, _, nn, ni = struct.unpack_from("<IIHHHH", data, dir_off)
+                    eo = dir_off + 16
+                    for _ in range(nn + ni):
+                        _, target = struct.unpack_from("<II", data, eo)
+                        eo += 8
+                        if target & 0x80000000:
+                            collect_leaves(rsrc_off + (target & 0x7FFFFFFF))
+                        else:
+                            drva, dsz, _, _ = struct.unpack_from("<IIII", data, rsrc_off + target)
+                            doff = rva_to_off(drva)
+                            assert doff is not None, f"{path}: unmapped RT_VERSION RVA"
+                            version_blobs.append(data[doff:doff + dsz])
+                collect_leaves(rsrc_off + (data_or_sub & 0x7FFFFFFF))
             ent_off += 8
         assert 3 in resource_types and 14 in resource_types, (
             f"{path}: missing RT_ICON (3) or RT_GROUP_ICON (14) in .rsrc types {resource_types}"
         )
+        assert 16 in resource_types and version_blobs, (
+            f"{path}: missing RT_VERSION (16) in .rsrc types {resource_types}"
+        )
+        (fv, pv), strings = parse_version_blob(version_blobs[0])
+        want_tuple = parse_win32_version(expected_version)
+        assert fv == want_tuple and pv == want_tuple, (
+            f"{path}: unexpected FILEVERSION/PRODUCTVERSION {fv}/{pv}, expected {want_tuple}"
+        )
+        expected_strings = {
+            "FileDescription": "Nyaacord",
+            "ProductName": "Nyaacord",
+            "InternalName": "Nyaacord",
+            "OriginalFilename": "Nyaacord.exe",
+            "FileVersion": expected_version,
+            "ProductVersion": expected_version,
+        }
+        for key, want in expected_strings.items():
+            got = strings.get(key)
+            assert got == want, f"{path}: VS_VERSION_INFO {key}={got!r}, expected {want!r}"
+        ver_summary = f"FILEVERSION={fv} FileDescription={strings['FileDescription']!r} ProductName={strings['ProductName']!r}"
 
     print(f"Verified PE32+ x86-64: {path}")
     print(f"  Machine: {machine:#06x}  OptMagic: {opt_magic:#06x}  Sections: {[s[0] for s in sections]}")
     print(f"  Imports ({len(imports)}): {', '.join(imports)}")
-    if expect_icon:
-        print(f"  Resource types: {resource_types} (RT_ICON=3, RT_GROUP_ICON=14)")
+    if expect_resources:
+        print(f"  Resource types: {resource_types} (RT_ICON=3, RT_GROUP_ICON=14, RT_VERSION=16)")
+        print(f"  VersionInfo: {ver_summary}")
 
-inspect_pe(sys.argv[1], expect_dll=True, expect_icon=False)
-inspect_pe(sys.argv[2], expect_dll=False, expect_icon=True)
+inspect_pe(sys.argv[1], expect_dll=True, expect_resources=False, expected_version=sys.argv[3])
+inspect_pe(sys.argv[2], expect_dll=False, expect_resources=True, expected_version=sys.argv[3])
 PY
 
 client_zip=""
 if [ "$no_client" = 0 ]; then
+   mkdir -p "$WORK/client"
    if [ -d "$client" ]; then
       client_dir="$client"
+      if [ ! -f "$client_dir/Discord.exe" ]; then
+         echo "Discord.exe not found in $client_dir" >&2
+         exit 1
+      fi
+      cp -f "$client_dir/Discord.exe" "$WORK/client/Discord.exe"
    else
-      client_dir="$WORK/client-src"
-      mkdir -p "$client_dir"
+      client_dir="$WORK/client"
       echo "Extracting Windows client from $client..."
       7z x -y "-o$client_dir" "$client" >/dev/null
+      if [ ! -f "$client_dir/Discord.exe" ]; then
+         echo "Discord.exe not found in $client_dir" >&2
+         exit 1
+      fi
    fi
-   if [ ! -f "$client_dir/Discord.exe" ]; then
-      echo "Discord.exe not found in $client_dir" >&2
-      exit 1
-   fi
+
+   bundled_discord_exe="$WORK/client/Discord.exe"
+   echo "Updating bundled Discord.exe Task Manager metadata..."
+   python3 - "$bundled_discord_exe" <<'PY'
+import array, struct, sys
+
+NEW_BRAND = "Nyaacord"
+TARGET_KEYS = ("FileDescription", "ProductName")
+ALLOWED_ORIG = {"Discord Phoenix", "Discord", NEW_BRAND}
+
+def compute_pe_checksum(buf: bytes, checksum_off: int) -> int:
+    work = bytearray(buf)
+    struct.pack_into("<I", work, checksum_off, 0)
+    file_len = len(work)
+    if file_len & 1:
+        work.append(0)
+    words = array.array("H")
+    words.frombytes(work)
+    if sys.byteorder != "little":
+        words.byteswap()
+    total = sum(words)
+    while total > 0xFFFF:
+        total = (total & 0xFFFF) + (total >> 16)
+    return (total + file_len) & 0xFFFFFFFF
+
+def parse_pe_layout(data: bytes):
+    assert data[:2] == b"MZ", "missing MZ header"
+    e_lfanew, = struct.unpack_from("<I", data, 60)
+    assert data[e_lfanew:e_lfanew + 4] == b"PE\0\0", "missing PE signature"
+    machine, num_sections, _, _, _, opt_size, characteristics = struct.unpack_from(
+        "<HHIIIHH", data, e_lfanew + 4
+    )
+    assert machine == 0x8664, f"unexpected machine {machine:#06x}"
+    assert (characteristics & 0x2000) == 0, "expected executable, got DLL"
+    opt_off = e_lfanew + 24
+    opt_magic, = struct.unpack_from("<H", data, opt_off)
+    assert opt_magic == 0x020B, f"unexpected optional header magic {opt_magic:#06x}"
+    checksum_off = opt_off + 64
+    num_dd, = struct.unpack_from("<I", data, opt_off + 108)
+    dd_off = opt_off + 112
+    sec_off = opt_off + opt_size
+    sections = []
+    max_sec_end = 0
+    for i in range(num_sections):
+        off = sec_off + i * 40
+        vsize, vaddr, raw_size, raw_ptr = struct.unpack_from("<IIII", data, off + 8)
+        sections.append((vaddr, max(vsize, raw_size), raw_ptr, raw_size))
+        if raw_ptr + raw_size > max_sec_end:
+            max_sec_end = raw_ptr + raw_size
+    return checksum_off, dd_off, num_dd, sections, max_sec_end
+
+def rva_to_off(sections, rva: int):
+    for vaddr, span, raw_ptr, raw_size in sections:
+        if vaddr <= rva < vaddr + span:
+            delta = rva - vaddr
+            if delta < raw_size:
+                return raw_ptr + delta
+    return None
+
+def collect_rt_version(data: bytes, sections, dd_off: int, num_dd: int):
+    assert num_dd > 2, "missing resource data directory"
+    rsrc_rva, rsrc_size = struct.unpack_from("<II", data, dd_off + 16)
+    assert rsrc_rva and rsrc_size, "empty resource data directory"
+    rsrc_off = rva_to_off(sections, rsrc_rva)
+    assert rsrc_off is not None, "could not map .rsrc RVA"
+
+    leaves = []
+    def walk_dir(dir_off: int, depth: int):
+        assert depth < 8, "resource directory nesting too deep"
+        assert dir_off + 16 <= len(data), f"resource directory header out of bounds ({dir_off})"
+        _, _, _, _, nn, ni = struct.unpack_from("<IIHHHH", data, dir_off)
+        eo = dir_off + 16
+        assert eo + (nn + ni) * 8 <= len(data), f"resource directory entries out of bounds ({eo})"
+        for _ in range(nn + ni):
+            rid, target = struct.unpack_from("<II", data, eo)
+            eo += 8
+            if depth == 0 and rid != 16:
+                continue
+            if target & 0x80000000:
+                walk_dir(rsrc_off + (target & 0x7FFFFFFF), depth + 1)
+            else:
+                leaf_off = rsrc_off + target
+                assert leaf_off + 16 <= len(data), f"resource data entry out of bounds ({leaf_off})"
+                drva, dsz, _, _ = struct.unpack_from("<IIII", data, leaf_off)
+                doff = rva_to_off(sections, drva)
+                assert doff is not None, "could not map RT_VERSION RVA"
+                assert doff + dsz <= len(data), (
+                    f"RT_VERSION resource out of bounds ({doff} + {dsz} > {len(data)})"
+                )
+                leaves.append((doff, dsz))
+    walk_dir(rsrc_off, 0)
+    assert leaves, "RT_VERSION resource not found"
+    return leaves
+
+def read_utf16z(buf, off: int, limit: int):
+    end = off
+    while end + 2 <= limit and buf[end:end + 2] != b"\x00\x00":
+        end += 2
+    return bytes(buf[off:end]).decode("utf-16le"), end
+
+def iter_version_string_slots(buf, base_off: int, size: int):
+    assert base_off >= 0 and size >= 6 and base_off + size <= len(buf), (
+        f"RT_VERSION bounds invalid ({base_off} + {size} > {len(buf)})"
+    )
+    wlen, vlen, _ = struct.unpack_from("<HHH", buf, base_off)
+    assert 6 <= wlen <= size, f"invalid VS_VERSION_INFO length ({wlen}, resource size {size})"
+    root_end = base_off + wlen
+    root_key, root_key_end = read_utf16z(buf, base_off + 6, root_end)
+    assert root_key == "VS_VERSION_INFO", f"unexpected root version key {root_key!r}"
+    val_off = base_off + (((root_key_end - base_off) + 2 + 3) & ~3)
+    pos = base_off + (((val_off - base_off) + vlen + 3) & ~3)
+    while pos + 6 <= root_end:
+        c_len, _, _ = struct.unpack_from("<HHH", buf, pos)
+        if c_len < 6:
+            break
+        c_end = min(pos + c_len, root_end)
+        c_key, c_key_end = read_utf16z(buf, pos + 6, c_end)
+        if c_key == "StringFileInfo":
+            t_pos = base_off + (((c_key_end - base_off) + 2 + 3) & ~3)
+            while t_pos + 6 <= c_end:
+                t_len, _, _ = struct.unpack_from("<HHH", buf, t_pos)
+                if t_len < 6:
+                    break
+                t_end = min(t_pos + t_len, c_end)
+                _, t_key_end = read_utf16z(buf, t_pos + 6, t_end)
+                s_pos = base_off + (((t_key_end - base_off) + 2 + 3) & ~3)
+                while s_pos + 6 <= t_end:
+                    s_len, s_vlen, s_type = struct.unpack_from("<HHH", buf, s_pos)
+                    if s_len < 6:
+                        break
+                    s_end = min(s_pos + s_len, t_end)
+                    s_key, s_key_end = read_utf16z(buf, s_pos + 6, s_end)
+                    s_val_off = base_off + (((s_key_end - base_off) + 2 + 3) & ~3)
+                    if s_type == 1 and s_val_off < s_end:
+                        slot_bytes = s_end - s_val_off
+                        yield s_pos, s_key, s_val_off, slot_bytes, s_vlen
+                    s_pos = base_off + (((s_end - base_off) + 3) & ~3)
+                t_pos = base_off + (((t_end - base_off) + 3) & ~3)
+        pos = base_off + (((c_end - base_off) + 3) & ~3)
+
+path = sys.argv[1]
+data = bytearray(open(path, "rb").read())
+checksum_off, dd_off, num_dd, sections, max_sec_end = parse_pe_layout(data)
+leaves = collect_rt_version(data, sections, dd_off, num_dd)
+
+replacement = (NEW_BRAND + "\x00").encode("utf-16le")
+new_vlen = len(NEW_BRAND) + 1
+updated = set()
+for doff, dsz in leaves:
+    for s_pos, key, val_off, slot_bytes, _ in iter_version_string_slots(data, doff, dsz):
+        if key not in TARGET_KEYS:
+            continue
+        existing = bytes(data[val_off:val_off + slot_bytes]).decode("utf-16le").split("\x00", 1)[0]
+        assert existing in ALLOWED_ORIG, f"{key}: unexpected value {existing!r}"
+        assert len(replacement) <= slot_bytes, (
+            f"{key}: slot too small ({slot_bytes} bytes) for {NEW_BRAND!r}"
+        )
+        padded = replacement + b"\x00" * (slot_bytes - len(replacement))
+        data[val_off:val_off + slot_bytes] = padded
+        struct.pack_into("<H", data, s_pos + 2, new_vlen)
+        updated.add(key)
+
+assert updated == set(TARGET_KEYS), f"missing VS_VERSION_INFO keys: {set(TARGET_KEYS) - updated}"
+
+trimmed_cert = 0
+if num_dd > 4:
+    cert_off, cert_size = struct.unpack_from("<II", data, dd_off + 32)
+    struct.pack_into("<II", data, dd_off + 32, 0, 0)
+    if cert_off > 0 and cert_size > 0 and cert_off + cert_size == len(data) and cert_off >= max_sec_end:
+        del data[cert_off:]
+        trimmed_cert = cert_size
+
+new_checksum = compute_pe_checksum(data, checksum_off)
+struct.pack_into("<I", data, checksum_off, new_checksum)
+
+with open(path, "wb") as fh:
+    fh.write(data)
+
+# Read back from disk and verify metadata, certificate clearing, and checksum.
+verify = open(path, "rb").read()
+v_cs_off, v_dd_off, v_num_dd, v_sections, _ = parse_pe_layout(verify)
+if v_num_dd > 4:
+    assert struct.unpack_from("<II", verify, v_dd_off + 32) == (0, 0), "certificate directory not zeroed"
+stored_cs, = struct.unpack_from("<I", verify, v_cs_off)
+recomputed_cs = compute_pe_checksum(verify, v_cs_off)
+assert stored_cs == recomputed_cs, f"checksum mismatch: stored={stored_cs:#010x} computed={recomputed_cs:#010x}"
+
+readback = {}
+readback_vlen = {}
+for doff, dsz in collect_rt_version(verify, v_sections, v_dd_off, v_num_dd):
+    for _, key, val_off, slot_bytes, s_vlen in iter_version_string_slots(verify, doff, dsz):
+        if key in TARGET_KEYS:
+            assert s_vlen == new_vlen, f"{key}: wValueLength mismatch ({s_vlen} != {new_vlen})"
+            raw = verify[val_off:val_off + slot_bytes]
+            assert raw.startswith(replacement) and all(b == 0 for b in raw[len(replacement):]), (
+                f"{key}: invalid NUL-padded UTF-16LE slot"
+            )
+            readback[key] = raw.decode("utf-16le").split("\x00", 1)[0]
+            readback_vlen[key] = s_vlen
+
+for key in TARGET_KEYS:
+    assert readback.get(key) == NEW_BRAND, f"{key} read back as {readback.get(key)!r}"
+    assert readback_vlen.get(key) == new_vlen, f"{key} wValueLength read back as {readback_vlen.get(key)!r}"
+
+print(
+    f"Verified bundled Discord.exe metadata: FileDescription={readback['FileDescription']!r} "
+    f"ProductName={readback['ProductName']!r} wValueLength={readback_vlen['FileDescription']} "
+    f"trimmed_cert={trimmed_cert} checksum={stored_cs:#010x}"
+)
+PY
 
    client_zip="$WORK/client.zip"
    echo "Packing Windows client overlay archive..."
-   python3 - "$client_dir" "$client_zip" <<'PY'
+   python3 - "$client_dir" "$client_zip" "$bundled_discord_exe" <<'PY'
 import hashlib, os, sys, zipfile
 
-src_dir, zip_path = sys.argv[1], sys.argv[2]
+src_dir, zip_path, discord_exe_override = sys.argv[1], sys.argv[2], sys.argv[3]
 CHUNK_BYTES = 1024 * 1024
 FIXED_TIME = (2026, 1, 1, 0, 0, 0)
 SKIP_TOP = {"discordphoenixsetup.exe", "nyaacord-client.stamp", "client-stamp.txt"}
@@ -594,6 +912,8 @@ for root, dirnames, filenames in os.walk(src_dir, followlinks=False):
         rel = os.path.relpath(full, src_dir).replace(os.sep, "/")
         if "/" not in rel and rel.lower() in SKIP_TOP:
             continue
+        if rel == "Discord.exe":
+            full = discord_exe_override
         files.append((rel, full))
 
 files.sort(key=lambda item: item[0])

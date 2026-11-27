@@ -7,63 +7,47 @@
 mod bridge;
 mod debug;
 mod discord;
-#[cfg(target_os = "android")] mod fetch;
-#[cfg(target_os = "ios")] mod foundation;
+#[cfg(target_os = "android")]
+mod fetch;
+#[cfg(target_os = "ios")]
+mod foundation;
 mod host;
-#[cfg(target_os = "android")] mod install;
+#[cfg(target_os = "android")]
+mod install;
 mod js;
-#[cfg(target_os = "android")] mod jvm;
-#[cfg(target_os = "android")] mod loader;
+#[cfg(target_os = "android")]
+mod jvm;
+#[cfg(target_os = "android")]
+mod loader;
 mod patches;
 mod picker;
 mod settings;
 mod socket;
-#[cfg(target_os = "android")] mod staff;
-#[cfg(target_os = "android")] mod store;
+#[cfg(target_os = "android")]
+mod staff;
+#[cfg(target_os = "android")]
+mod store;
 
 pub(crate) use phoenix_runtime::highlight;
 
 use std::{
    ffi::c_void,
-   path::{
-      Path,
-      PathBuf,
-   },
+   path::{Path, PathBuf},
 };
 
 use phoenix_hook::image::Image;
 #[cfg(target_os = "android")]
 use phoenix_runtime::update::Update;
 use phoenix_runtime::{
-   Error,
-   Notice,
-   Platform,
-   Plugin,
-   Started,
-   discord::{
-      Authorization,
-      DiscordError,
-   },
-   fetch::{
-      FetchError,
-      Request,
-      Response,
-   },
+   Error, Notice, Platform, Plugin, Started,
+   discord::{Authorization, DiscordError},
+   fetch::{FetchError, Request, Response},
    remote,
-   store::{
-      Rows,
-      StoreError,
-   },
+   store::{Rows, StoreError},
 };
-use rquickjs::{
-   Ctx,
-   Object,
-};
+use rquickjs::{Ctx, Object};
 
-use crate::patches::banners::{
-   self,
-   BannerAction,
-};
+use crate::patches::banners::{self, BannerAction};
 
 struct Mobile;
 
@@ -72,7 +56,7 @@ pub fn start(home: PathBuf, bundled: Vec<Plugin>) -> Result<Started, Error> {
    phoenix_runtime::start(&Mobile, home, bundled)
 }
 
-/// `NyaaCord`'s green, for update banners.
+/// `Nyaacord`'s green, for update banners.
 const ACCENT: i64 = 0xFF23_A55A;
 
 impl Platform for Mobile {
@@ -203,7 +187,7 @@ impl Platform for Mobile {
                |version| format!("Upstream build {version}, tap to update in-app"),
             );
             banners::show_banner(
-               "NyaaCord updates available".to_owned(),
+               "Nyaacord updates available".to_owned(),
                Some(body),
                Some("res://ic_mana_puzzle_piece_retry".to_owned()),
                Some(ACCENT),

@@ -4,7 +4,7 @@ use std::{fs::File, path::Path};
 
 use crate::Error;
 
-pub const USER_AGENT: &str = "NyaaCord-Updater/0.1";
+pub const USER_AGENT: &str = "Nyaacord-Updater/0.1";
 
 const MAX_REDIRS: usize = 10;
 
@@ -547,7 +547,7 @@ mod unix {
       Ok(list)
    }
 
-   const USER_AGENT_CSTR: &CStr = c"NyaaCord-Updater/0.1";
+   const USER_AGENT_CSTR: &CStr = c"Nyaacord-Updater/0.1";
    const PROTO_HTTPS_CSTR: &CStr = c"https";
    const PROTO_HTTP_HTTPS_CSTR: &CStr = c"http,https";
 
@@ -1906,7 +1906,7 @@ mod tests {
 
    #[test]
    fn resolves_redirect_urls() {
-      let base = "https://github.com/CateDesu/NyaaCord/releases/download/v0.2.0/NyaaCord.exe";
+      let base = "https://github.com/CateDesu/NyaaCord/releases/download/v0.2.0/Nyaacord.exe";
       assert_eq!(
          resolve_redirect_url(base, "https://objects.githubusercontent.com/blob?sig=1").ok(),
          Some("https://objects.githubusercontent.com/blob?sig=1".to_owned())
@@ -1920,9 +1920,9 @@ mod tests {
          Some("https://cdn.example.com/file.exe".to_owned())
       );
       assert_eq!(
-         resolve_redirect_url(base, "../v0.3.0/NyaaCord.exe?raw=1").ok(),
+         resolve_redirect_url(base, "../v0.3.0/Nyaacord.exe?raw=1").ok(),
          Some(
-            "https://github.com/CateDesu/NyaaCord/releases/download/v0.3.0/NyaaCord.exe?raw=1"
+            "https://github.com/CateDesu/NyaaCord/releases/download/v0.3.0/Nyaacord.exe?raw=1"
                .to_owned()
          )
       );

@@ -958,13 +958,14 @@ declare namespace Phoenix {
         : never;
 
   type SettingValues<S> = {
-    readonly [K in keyof S as S[K] extends { type: "button" } ? never : K]: SettingValue<S[K]>;
+    -readonly [K in keyof S as S[K] extends { type: "button" } ? never : K]: SettingValue<S[K]>;
   };
 
   interface Settings {
     /// Shows the settings on the plugin's page in Settings. Each property of the result reads
-    /// the user's current choice, so read it when needed instead of caching it. Text and number
-    /// fields save when the keyboard's go key is pressed.
+    /// the user's current choice, so read it when needed instead of caching it. Assigning to a
+    /// property updates the saved value and refreshes Settings UI without calling `onChange`.
+    /// Text and number fields save when the keyboard's go key is pressed.
     define<const S extends Record<string, SettingSpec>>(schema: S): SettingValues<S>;
   }
 
@@ -1129,6 +1130,10 @@ declare namespace Phoenix {
     /// Reactions and the rest keep the lock, and nothing else about Nitro changes. Desktop has no
     /// picker presses to report: the handler is never called there, only the unlock applies.
     onEmojiPick(handler: (emojiId: string, ctx: UiContext) => string | void): Remover;
+    /// Suppresses Discord's local typing-start trigger while active, stopping local typing dots
+    /// and outgoing typing notifications on Desktop Phoenix. Call the returned function to restore
+    /// normal typing behavior. On mobile, returns a no-op remover.
+    suppressTyping(): Remover;
   }
 
   /// `channelId` is the open channel, `reply` posts a local message there.

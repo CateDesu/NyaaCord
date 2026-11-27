@@ -1,47 +1,41 @@
 //! `phoenix.storage`, a JSON object per plugin on disk, and `phoenix.stores`,
 //! read-only SQL over Phoenix's cache.
 
-use std::{
-   fs,
-   io::ErrorKind,
-   path::PathBuf,
-};
+use std::{fs, io::ErrorKind, path::PathBuf};
 
-use rquickjs::{
-   Ctx,
-   Exception,
-   Function,
-   Object,
-   Value,
-   function::Rest,
-};
+use rquickjs::{Ctx, Exception, Function, Object, Value, function::Rest};
 
 use crate::{
-   io_error,
+   STATE, io_error,
    js::{
-      background::{
-         Settlement,
-         in_background,
-      },
-      state,
-      throw,
+      background::{Settlement, in_background},
+      state, throw,
    },
    store,
 };
 
 /// A JSON object per plugin, loaded once and rewritten on every change.
 pub fn storage<'js>(ctx: &Ctx<'js>, plugin: &str) -> rquickjs::Result<Object<'js>> {
-   let path = state().storage_path(plugin);
-   let text = match fs::read_to_string(&path) {
-      Ok(text) => text,
-      Err(err) if err.kind() == ErrorKind::NotFound => "{}".to_owned(),
-      Err(err) => return Err(throw(ctx, &io_error(&path)(err))),
+   let path = STATE.get().map(|state| state.storage_path(plugin));
+   let text = match &path {
+      Some(path) => match fs::read_to_string(path) {
+         Ok(text) => text,
+         Err(err) if err.kind() == ErrorKind::NotFound => "{}".to_owned(),
+         Err(err) => return Err(throw(ctx, &io_error(path)(err))),
+      },
+      None => "{}".to_owned(),
    };
    let store = ctx.json_parse(text)?.into_object().ok_or_else(|| {
-      Exception::throw_type(ctx, &format!("{} is not a JSON object", path.display()))
+      let label = path
+         .as_ref()
+         .map_or_else(|| format!("{plugin} storage"), |p| p.display().to_string());
+      Exception::throw_type(ctx, &format!("{label} is not a JSON object"))
    })?;
 
-   let persist = move |ctx: &Ctx<'js>, store: &Object<'js>, path: &PathBuf| {
+   let persist = move |ctx: &Ctx<'js>, store: &Object<'js>, path: &Option<PathBuf>| {
+      let Some(path) = path else {
+         return Ok(());
+      };
       let json = ctx
          .json_stringify(store.clone())?
          .map(|json| json.to_string())

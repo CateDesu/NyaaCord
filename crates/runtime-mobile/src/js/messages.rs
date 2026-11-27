@@ -1,33 +1,14 @@
 //! `phoenix.commands`, send interceptors and emoji picks.
 
-use phoenix_runtime::js::{
-   Engine,
-   Registry,
-};
-use rquickjs::{
-   CatchResultExt,
-   Ctx,
-   Exception,
-   Function,
-   Object,
-   Value,
-};
+use phoenix_runtime::js::{Engine, Registry};
+use rquickjs::{CatchResultExt, Ctx, Exception, Function, Object, Value};
 
 use crate::{
    js::{
       Mobile,
-      ui::{
-         context_object,
-         remover,
-         ui_object,
-      },
+      ui::{context_object, remover, ui_object},
    },
-   patches::{
-      self,
-      Sent,
-      UiContext,
-      commands::Command,
-   },
+   patches::{self, Sent, UiContext, commands::Command},
 };
 
 /// Runs the slash command `text` names, if any, then every send
@@ -167,6 +148,10 @@ pub fn patch_api<'js>(
          move |ctx: Ctx<'js>, function: Function<'js>| on_emoji_pick(&ctx, &name, function),
       )?,
    )?;
+   messages.set(
+      "suppressTyping",
+      Function::new(ctx.clone(), |ctx: Ctx<'js>| remover(&ctx, |_| {}, None))?,
+   )?;
    api.set("ui", ui_object(ctx, plugin)?)?;
    api.set("commands", commands_object(ctx, plugin)?)
 }
@@ -195,12 +180,12 @@ fn commands_object<'js>(ctx: &Ctx<'js>, plugin: &str) -> rquickjs::Result<Object
             .borrow_mut()
             .insert(name.clone(), (owner.clone(), execute.clone()));
          patches::commands::add_command(Command {
-            name:        name.clone(),
+            name: name.clone(),
             description: options
                .get::<_, Option<String>>("description")?
                .unwrap_or_default(),
-            icon:        options.get("icon")?,
-            plugin:      owner.clone(),
+            icon: options.get("icon")?,
+            plugin: owner.clone(),
          });
          remover(
             &ctx,

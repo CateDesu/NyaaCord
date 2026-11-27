@@ -1,25 +1,12 @@
 //! `phoenix.settings`, the settings a plugin defines and what the user chose.
 
-use rquickjs::{
-   CatchResultExt,
-   Ctx,
-   Exception,
-   Function,
-   IntoJs,
-   Object,
-   Value,
-   object::Accessor,
-};
+use std::sync::atomic::Ordering;
+
+use rquickjs::{CatchResultExt, Ctx, Exception, Function, IntoJs, Object, Value, object::Accessor};
 
 use crate::{
-   Choice,
-   Chosen,
-   Control,
-   js::{
-      Engine,
-      Registry,
-      drain,
-   },
+   Choice, Chosen, Control,
+   js::{Engine, Registry, drain},
 };
 
 impl Engine {
@@ -55,6 +42,7 @@ impl Engine {
          }
       });
       drain(&self.runtime);
+      let _ = self.take_choices_dirty();
       self.save_choices();
    }
 
@@ -67,11 +55,9 @@ impl Engine {
                .get(plugin)?
                .iter()
                .find(|definition| definition.key == key)
-               .and_then(|definition| {
-                  match &definition.kind {
-                     Kind::Button(handler) => Some(handler.clone()),
-                     _ => None,
-                  }
+               .and_then(|definition| match &definition.kind {
+                  Kind::Button(handler) => Some(handler.clone()),
+                  _ => None,
                })
          });
          if let Some(handler) = handler
@@ -80,17 +66,17 @@ impl Engine {
             log::error!("[{plugin}] {key}: {err}");
          }
       });
-      drain(&self.runtime);
+      self.drain_and_flush();
    }
 }
 
 /// One setting a plugin defined with `phoenix.settings.define`.
 pub struct Definition<'js> {
-   pub key:         String,
-   pub title:       String,
+   pub key: String,
+   pub title: String,
    pub description: Option<String>,
-   pub kind:        Kind<'js>,
-   on_change:       Option<Function<'js>>,
+   pub kind: Kind<'js>,
+   on_change: Option<Function<'js>>,
 }
 
 /// A setting's type with its default, or a button's handler.
@@ -174,20 +160,16 @@ fn redact_secrets(registry: &Registry<'_>) {
 fn setting_kind<'js>(ctx: &Ctx<'js>, key: &str, spec: &Object<'js>) -> rquickjs::Result<Kind<'js>> {
    Ok(match spec.get::<_, String>("type")?.as_str() {
       "switch" => Kind::Switch(spec.get::<_, Option<bool>>("default")?.unwrap_or_default()),
-      "text" => {
-         Kind::Text(
-            spec
-               .get::<_, Option<String>>("default")?
-               .unwrap_or_default(),
-         )
-      },
-      "secret" => {
-         Kind::Secret(
-            spec
-               .get::<_, Option<String>>("default")?
-               .unwrap_or_default(),
-         )
-      },
+      "text" => Kind::Text(
+         spec
+            .get::<_, Option<String>>("default")?
+            .unwrap_or_default(),
+      ),
+      "secret" => Kind::Secret(
+         spec
+            .get::<_, Option<String>>("default")?
+            .unwrap_or_default(),
+      ),
       "select" => {
          let options = spec
             .get::<_, Vec<Object<'js>>>("options")?
@@ -226,8 +208,99 @@ fn setting_kind<'js>(ctx: &Ctx<'js>, key: &str, spec: &Object<'js>) -> rquickjs:
    })
 }
 
+/// Validates and converts a JS value assigned to `settings.<key>`.
+fn parse_setting_value<'js>(
+   ctx: &Ctx<'js>,
+   key: &str,
+   kind: &Kind<'js>,
+   value: &Value<'js>,
+) -> rquickjs::Result<Option<Chosen>> {
+   match kind {
+      Kind::Switch(_) => {
+         let on = value.as_bool().ok_or_else(|| {
+            Exception::throw_type(ctx, &format!("setting {key}: boolean expected"))
+         })?;
+         Ok(Some(Chosen::Switch(on)))
+      },
+      Kind::Number(_) => {
+         let num = value.as_number().ok_or_else(|| {
+            Exception::throw_type(ctx, &format!("setting {key}: number expected"))
+         })?;
+         if !num.is_finite() {
+            return Err(Exception::throw_range(
+               ctx,
+               &format!("setting {key}: finite number expected"),
+            ));
+         }
+         Ok(Some(Chosen::Number(num)))
+      },
+      Kind::Text(_) | Kind::Secret(_) => {
+         let text = value
+            .as_string()
+            .and_then(|s| s.to_string().ok())
+            .ok_or_else(|| {
+               Exception::throw_type(ctx, &format!("setting {key}: string expected"))
+            })?;
+         Ok(Some(Chosen::Text(text)))
+      },
+      Kind::Select { options, .. } => {
+         let text = value
+            .as_string()
+            .and_then(|s| s.to_string().ok())
+            .ok_or_else(|| {
+               Exception::throw_type(ctx, &format!("setting {key}: string expected"))
+            })?;
+         if !options.iter().any(|choice| choice.value == text) {
+            return Err(Exception::throw_range(
+               ctx,
+               &format!("setting {key}: unknown option {text:?}"),
+            ));
+         }
+         Ok(Some(Chosen::Text(text)))
+      },
+      Kind::Button(_) => Ok(None),
+   }
+}
+
+/// Persists a programmatic write to `settings.<key>` without firing `onChange`.
+fn write_setting<'js>(
+   ctx: &Ctx<'js>,
+   plugin: &str,
+   key: &str,
+   value: &Value<'js>,
+) -> rquickjs::Result<()> {
+   let registry = ctx
+      .userdata::<Registry<'js>>()
+      .ok_or_else(|| Exception::throw_internal(ctx, "no registry"))?;
+   let next = {
+      let defined = registry.defined.borrow();
+      let Some(definition) = defined
+         .get(plugin)
+         .and_then(|list| list.iter().find(|definition| definition.key == key))
+      else {
+         return Ok(());
+      };
+      let Some(chosen) = parse_setting_value(ctx, key, &definition.kind, value)? else {
+         return Ok(());
+      };
+      chosen
+   };
+   registry
+      .chosen
+      .borrow_mut()
+      .entry(plugin.to_owned())
+      .or_default()
+      .insert(key.to_owned(), next);
+   redact_secrets(&registry);
+   registry.choices_dirty.store(true, Ordering::Release);
+   if let Some(platform) = crate::platform() {
+      platform.refresh();
+   }
+   Ok(())
+}
+
 /// Records `schema` as the plugin's settings and returns an object with one
-/// getter per non-button key that reads the user's current choice.
+/// getter and setter per non-button key backed by the user's current choice.
 fn define<'js>(
    ctx: &Ctx<'js>,
    plugin: &str,
@@ -251,7 +324,7 @@ fn define<'js>(
       if matches!(definition.kind, Kind::Button(_)) {
          continue;
       }
-      let (plugin, key) = (plugin.to_owned(), definition.key.clone());
+      let (read_plugin, read_key) = (plugin.to_owned(), definition.key.clone());
       let read = move |ctx: Ctx<'js>| -> rquickjs::Result<Value<'js>> {
          let registry = ctx
             .userdata::<Registry<'js>>()
@@ -259,12 +332,14 @@ fn define<'js>(
          let defined = registry.defined.borrow();
          let chosen = registry.chosen.borrow();
          let Some(definition) = defined
-            .get(&plugin)
-            .and_then(|list| list.iter().find(|definition| definition.key == key))
+            .get(&read_plugin)
+            .and_then(|list| list.iter().find(|definition| definition.key == read_key))
          else {
             return Ok(Value::new_undefined(ctx.clone()));
          };
-         let picked = chosen.get(&plugin).and_then(|values| values.get(&key));
+         let picked = chosen
+            .get(&read_plugin)
+            .and_then(|values| values.get(&read_key));
          match definition.kind.current(picked) {
             Control::Switch(on) => on.into_js(&ctx),
             Control::Text(text) | Control::Secret(text) => text.into_js(&ctx),
@@ -273,9 +348,13 @@ fn define<'js>(
             Control::Button => Ok(Value::new_undefined(ctx.clone())),
          }
       };
+      let (write_plugin, write_key) = (plugin.to_owned(), definition.key.clone());
+      let write = move |ctx: Ctx<'js>, value: Value<'js>| -> rquickjs::Result<()> {
+         write_setting(&ctx, &write_plugin, &write_key, &value)
+      };
       values.prop(
          definition.key.as_str(),
-         Accessor::new_get(read).enumerable(),
+         Accessor::new(read, write).enumerable(),
       )?;
    }
    ctx.userdata::<Registry<'js>>()

@@ -1,6 +1,6 @@
 [package]
 name = "phoenix-inject"
-description = "Self-contained Windows launcher for NyaaCord on Desktop Phoenix"
+description = "Self-contained Windows launcher for Nyaacord on Desktop Phoenix"
 edition.workspace = true
 license.workspace = true
 version.workspace = true

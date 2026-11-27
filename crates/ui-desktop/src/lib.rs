@@ -9,22 +9,24 @@
 //! Each OS implements [`DesktopHost`]; everything above it is shared here.
 
 mod icon;
-#[cfg(target_os = "linux")] mod linux;
-#[cfg(windows)] mod webview;
-#[cfg(windows)] mod windows;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(windows)]
+mod webview;
+#[cfg(windows)]
+mod windows;
 
 use std::{
    path::PathBuf,
    process::Command,
-   sync::{
-      Arc,
-      OnceLock,
-   },
+   sync::{Arc, OnceLock},
    thread,
 };
 
-#[cfg(target_os = "linux")] use linux::Host as Os;
-#[cfg(windows)] use windows::Host as Os;
+#[cfg(target_os = "linux")]
+use linux::Host as Os;
+#[cfg(windows)]
+use windows::Host as Os;
 
 /// Self-contained HTML/JS/CSS companion dashboard for Desktop settings,
 /// plugin management, catalog installs, OTA updates, and JS console.
@@ -46,9 +48,9 @@ pub enum Error {
 
 /// Configuration and runtime callbacks for the desktop system tray.
 pub struct TrayConfig {
-   pub dashboard_url:    String,
-   pub plugins_dir:      PathBuf,
-   pub on_reload_all:    Option<Arc<dyn Fn() + Send + Sync>>,
+   pub dashboard_url: String,
+   pub plugins_dir: PathBuf,
+   pub on_reload_all: Option<Arc<dyn Fn() + Send + Sync>>,
    pub on_check_updates: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -96,7 +98,7 @@ impl TrayAction {
    )]
    const fn label(self) -> &'static str {
       match self {
-         Self::OpenSettings => "Open NyaaCord Settings",
+         Self::OpenSettings => "Open Nyaacord Settings",
          Self::OpenDevtools => "Open DevTools (Console)",
          Self::ReloadAll => "Reload All Plugins",
          Self::CheckUpdates => "Check for Updates",
@@ -128,7 +130,7 @@ impl TrayAction {
          },
          Self::CopyUrl => {
             if copy(&config.dashboard_url).is_ok() {
-               Os::notify("NyaaCord", &format!("Copied {}", config.dashboard_url));
+               Os::notify("Nyaacord", &format!("Copied {}", config.dashboard_url));
             }
          },
          Self::OpenPlugins => {
@@ -189,7 +191,7 @@ pub fn start_tray(config: TrayConfig) {
    Os::start_tray();
 }
 
-/// Opens the `NyaaCord` settings dashboard in a standalone chromeless app window
+/// Opens the `Nyaacord` settings dashboard in a standalone chromeless app window
 /// (a Chromium `--app` window when available, else the system browser).
 pub fn open_settings() {
    if let Some(config) = config() {
@@ -197,7 +199,7 @@ pub fn open_settings() {
    }
 }
 
-/// Opens the `NyaaCord` `DevTools` / Runtime Console directly in a standalone
+/// Opens the `Nyaacord` `DevTools` / Runtime Console directly in a standalone
 /// window (`Ctrl+Shift+I` while Discord Phoenix is focused).
 pub fn open_devtools() {
    if let Some(config) = config() {
@@ -231,10 +233,8 @@ fn open_app_window(url: &str, width: u32, height: u32) {
 /// Spawns `command` and waits for it on a background thread, so it never
 /// lingers as a zombie on Unix.
 fn spawn_reaped(command: &mut Command) -> Result<(), Error> {
-   let mut child = command.spawn().map_err(|err| {
-      Error::Platform {
-         message: format!("{}: {err}", command.get_program().display()),
-      }
+   let mut child = command.spawn().map_err(|err| Error::Platform {
+      message: format!("{}: {err}", command.get_program().display()),
    })?;
    let _ = thread::Builder::new()
       .name("sunbird-reap".to_owned())
@@ -271,7 +271,7 @@ pub fn open_url(url: &str) -> Result<(), Error> {
 /// Shows a short desktop toast / notification message.
 pub fn toast(message: &str) {
    log::info!("[toast] {message}");
-   Os::notify("NyaaCord", message);
+   Os::notify("Nyaacord", message);
 }
 
 /// Shows a titled desktop notification.
@@ -283,7 +283,7 @@ pub fn notify(title: &str, body: Option<&str>) {
       },
       _ => {
          log::info!("[notify] {title}");
-         Os::notify("NyaaCord", title);
+         Os::notify("Nyaacord", title);
       },
    }
 }
@@ -310,7 +310,7 @@ mod tests {
 
    #[test]
    fn dashboard_html_is_embedded() {
-      assert!(DASHBOARD_HTML.contains("<title>NyaaCord Settings</title>"));
+      assert!(DASHBOARD_HTML.contains("<title>Nyaacord Settings</title>"));
       assert!(DASHBOARD_HTML.contains("/plugins"));
       assert!(DASHBOARD_HTML.contains("/catalog"));
       assert!(DASHBOARD_HTML.contains("/icon.gif"));

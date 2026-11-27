@@ -3,29 +3,18 @@
 //! Every Phoenix shares the `(k TEXT PRIMARY KEY NOT NULL, v BLOB NOT NULL)
 //! WITHOUT ROWID` schema, and the platform runs the query.
 
-#[cfg(feature = "sqlite")] use std::time::Duration;
+#[cfg(feature = "sqlite")]
+use std::time::Duration;
 use std::{
    fs,
-   path::{
-      Path,
-      PathBuf,
-   },
+   path::{Path, PathBuf},
 };
 
 #[cfg(feature = "sqlite")]
-use rusqlite::{
-   Connection,
-   OpenFlags,
-   params_from_iter,
-   types::ValueRef,
-};
+use rusqlite::{Connection, OpenFlags, params_from_iter, types::ValueRef};
 use serde::{
-   Serialize,
-   Serializer,
-   ser::{
-      SerializeMap,
-      SerializeSeq,
-   },
+   Serialize, Serializer,
+   ser::{SerializeMap, SerializeSeq},
 };
 
 /// Keeps a careless `select *` from copying a whole message table into JS.
@@ -58,7 +47,7 @@ impl Cell {
 /// A query result. Serializes as an array of objects keyed by column name.
 pub struct Rows {
    pub columns: Vec<String>,
-   pub rows:    Vec<Vec<Cell>>,
+   pub rows: Vec<Vec<Cell>>,
 }
 
 impl Rows {
@@ -162,7 +151,7 @@ pub fn query(database: &Path, sql: &str, args: &[String]) -> Result<Rows, StoreE
 
 /// Opens Phoenix's database read-only beside Phoenix's own connection.
 ///
-/// On Linux and iOS, file locks belong to the process, so this second SQLite
+/// On Linux and iOS, file locks belong to the process, so this second `SQLite`
 /// inside Phoenix's process would take Phoenix's WAL locks as free, reset the
 /// shared `-shm` index Phoenix has mapped (a `SIGBUS` in Phoenix's database
 /// thread on Linux), and drop Phoenix's locks on close. `immutable` takes no
@@ -185,7 +174,7 @@ fn open(database: &Path) -> rusqlite::Result<Connection> {
    )
 }
 
-/// [`query`] over a bundled SQLite, for platforms that have no SQLite of their
+/// [`query`] over a bundled `SQLite`, for platforms that have no `SQLite` of their
 /// own to reach.
 #[cfg(feature = "sqlite")]
 pub fn sqlite(database: &Path, sql: &str, args: &[String]) -> Result<Rows, StoreError> {
@@ -231,10 +220,7 @@ impl From<rusqlite::Error> for StoreError {
 
 #[cfg(test)]
 mod tests {
-   use std::time::{
-      Duration,
-      SystemTime,
-   };
+   use std::time::{Duration, SystemTime};
 
    use super::*;
 

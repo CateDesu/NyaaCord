@@ -4,23 +4,13 @@ use std::{
    process::Command,
    ptr,
    sync::{
-      Mutex,
-      PoisonError,
-      atomic::{
-         AtomicBool,
-         AtomicU32,
-         AtomicUsize,
-         Ordering,
-      },
+      Mutex, PoisonError,
+      atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
    },
    thread,
 };
 
-use crate::{
-   DesktopHost,
-   Error,
-   TrayAction,
-};
+use crate::{DesktopHost, Error, TrayAction};
 
 const CF_UNICODETEXT: u32 = 13;
 const GMEM_MOVEABLE: u32 = 0x0002;
@@ -77,18 +67,18 @@ static PENDING_BALLOONS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
 #[repr(C)]
 struct WndClassExW {
-   cb_size:    u32,
-   style:      u32,
-   wnd_proc:   unsafe extern "system" fn(*mut c_void, u32, usize, isize) -> isize,
-   cls_extra:  i32,
-   wnd_extra:  i32,
-   instance:   *mut c_void,
-   icon:       *mut c_void,
-   cursor:     *mut c_void,
+   cb_size: u32,
+   style: u32,
+   wnd_proc: unsafe extern "system" fn(*mut c_void, u32, usize, isize) -> isize,
+   cls_extra: i32,
+   wnd_extra: i32,
+   instance: *mut c_void,
+   icon: *mut c_void,
+   cursor: *mut c_void,
    background: *mut c_void,
-   menu_name:  *const u16,
+   menu_name: *const u16,
    class_name: *const u16,
-   icon_sm:    *mut c_void,
+   icon_sm: *mut c_void,
 }
 
 #[repr(C)]
@@ -99,55 +89,55 @@ struct Point {
 
 #[repr(C)]
 struct Msg {
-   hwnd:    *mut c_void,
+   hwnd: *mut c_void,
    message: u32,
-   wparam:  usize,
-   lparam:  isize,
-   time:    u32,
-   pt:      Point,
+   wparam: usize,
+   lparam: isize,
+   time: u32,
+   pt: Point,
 }
 
 #[repr(C)]
 struct NotifyIconDataW {
-   cb_size:              u32,
-   hwnd:                 *mut c_void,
-   u_id:                 u32,
-   u_flags:              u32,
-   u_callback_message:   u32,
-   h_icon:               *mut c_void,
-   sz_tip:               [u16; 128],
-   dw_state:             u32,
-   dw_state_mask:        u32,
-   sz_info:              [u16; 256],
+   cb_size: u32,
+   hwnd: *mut c_void,
+   u_id: u32,
+   u_flags: u32,
+   u_callback_message: u32,
+   h_icon: *mut c_void,
+   sz_tip: [u16; 128],
+   dw_state: u32,
+   dw_state_mask: u32,
+   sz_info: [u16; 256],
    u_timeout_or_version: u32,
-   sz_info_title:        [u16; 64],
-   dw_info_flags:        u32,
-   guid_item:            [u8; 16],
-   h_balloon_icon:       *mut c_void,
+   sz_info_title: [u16; 64],
+   dw_info_flags: u32,
+   guid_item: [u8; 16],
+   h_balloon_icon: *mut c_void,
 }
 
 #[repr(C)]
 #[expect(clippy::struct_field_names, reason = "Win32's BITMAPINFOHEADER names")]
 struct BitmapInfoHeader {
-   bi_size:          u32,
-   bi_width:         i32,
-   bi_height:        i32,
-   bi_planes:        u16,
-   bi_bit_count:     u16,
-   bi_compression:   u32,
-   bi_size_image:    u32,
-   bi_x_pels:        i32,
-   bi_y_pels:        i32,
-   bi_clr_used:      u32,
+   bi_size: u32,
+   bi_width: i32,
+   bi_height: i32,
+   bi_planes: u16,
+   bi_bit_count: u16,
+   bi_compression: u32,
+   bi_size_image: u32,
+   bi_x_pels: i32,
+   bi_y_pels: i32,
+   bi_clr_used: u32,
    bi_clr_important: u32,
 }
 
 #[repr(C)]
 struct IconInfo {
-   f_icon:    i32,
+   f_icon: i32,
    x_hotspot: u32,
    y_hotspot: u32,
-   hbm_mask:  *mut c_void,
+   hbm_mask: *mut c_void,
    hbm_color: *mut c_void,
 }
 
@@ -247,29 +237,29 @@ unsafe extern "system" {
 
 #[repr(C)]
 struct OpenFileNameW {
-   l_struct_size:       u32,
-   hwnd_owner:          *mut c_void,
-   h_instance:          *mut c_void,
-   lpstr_filter:        *const u16,
+   l_struct_size: u32,
+   hwnd_owner: *mut c_void,
+   h_instance: *mut c_void,
+   lpstr_filter: *const u16,
    lpstr_custom_filter: *mut u16,
-   n_max_cust_filter:   u32,
-   n_filter_index:      u32,
-   lpstr_file:          *mut u16,
-   n_max_file:          u32,
-   lpstr_file_title:    *mut u16,
-   n_max_file_title:    u32,
-   lpstr_initial_dir:   *const u16,
-   lpstr_title:         *const u16,
-   flags:               u32,
-   n_file_offset:       u16,
-   n_file_extension:    u16,
-   lpstr_def_ext:       *const u16,
-   l_cust_data:         isize,
-   lpfn_hook:           *const c_void,
-   lp_template_name:    *const u16,
-   pv_reserved:         *mut c_void,
-   dw_reserved:         u32,
-   flags_ex:            u32,
+   n_max_cust_filter: u32,
+   n_filter_index: u32,
+   lpstr_file: *mut u16,
+   n_max_file: u32,
+   lpstr_file_title: *mut u16,
+   n_max_file_title: u32,
+   lpstr_initial_dir: *const u16,
+   lpstr_title: *const u16,
+   flags: u32,
+   n_file_offset: u16,
+   n_file_extension: u16,
+   lpstr_def_ext: *const u16,
+   l_cust_data: isize,
+   lpfn_hook: *const c_void,
+   lp_template_name: *const u16,
+   pv_reserved: *mut c_void,
+   dw_reserved: u32,
+   flags_ex: u32,
 }
 
 #[link(name = "comdlg32")]
@@ -303,7 +293,7 @@ fn os_err(context: &str) -> Error {
    }
 }
 
-/// Builds the `NyaaCord` fox ARGB icon for the Windows system tray, falling back
+/// Builds the `Nyaacord` fox ARGB icon for the Windows system tray, falling back
 /// to `IDI_APPLICATION` if decoding or GDI allocation fails.
 unsafe fn create_sunbird_icon() -> *mut c_void {
    let fallback = || {
@@ -327,16 +317,16 @@ unsafe fn create_sunbird_icon() -> *mut c_void {
       reason = "BITMAPINFOHEADER is 40 bytes"
    )]
    let bmi = BitmapInfoHeader {
-      bi_size:          size_of::<BitmapInfoHeader>() as u32,
-      bi_width:         width,
-      bi_height:        -height, // top-down DIB
-      bi_planes:        1,
-      bi_bit_count:     32,
-      bi_compression:   BI_RGB,
-      bi_size_image:    0,
-      bi_x_pels:        0,
-      bi_y_pels:        0,
-      bi_clr_used:      0,
+      bi_size: size_of::<BitmapInfoHeader>() as u32,
+      bi_width: width,
+      bi_height: -height, // top-down DIB
+      bi_planes: 1,
+      bi_bit_count: 32,
+      bi_compression: BI_RGB,
+      bi_size_image: 0,
+      bi_x_pels: 0,
+      bi_y_pels: 0,
+      bi_clr_used: 0,
       bi_clr_important: 0,
    };
    let mut bits: *mut c_void = ptr::null_mut();
@@ -362,10 +352,10 @@ unsafe fn create_sunbird_icon() -> *mut c_void {
       let mask_bytes = vec![0_u8; mask_stride * (decoded.height as usize)];
       let mask = CreateBitmap(width, height, 1, 1, mask_bytes.as_ptr().cast());
       let mut info = IconInfo {
-         f_icon:    1,
+         f_icon: 1,
          x_hotspot: 0,
          y_hotspot: 0,
-         hbm_mask:  mask,
+         hbm_mask: mask,
          hbm_color: color,
       };
       let icon = CreateIconIndirect(&raw mut info);
@@ -413,7 +403,7 @@ unsafe fn add_tray_icon(hwnd: *mut c_void, icon: *mut c_void) -> bool {
    nid.h_icon = icon;
    fill_wide(
       &mut nid.sz_tip,
-      "NyaaCord. Click or press Ctrl+Shift+U for Settings",
+      "Nyaacord. Click or press Ctrl+Shift+U for Settings",
    );
    // SAFETY: `hwnd` and `icon` are live Win32 handles on the tray thread.
    unsafe { Shell_NotifyIconW(NIM_ADD, &raw mut nid) != 0 }
@@ -431,7 +421,7 @@ fn start_tray() {
 
 fn run_tray_loop() {
    let class_name = wide("SunbirdTrayWindow");
-   let title = wide("NyaaCord");
+   let title = wide("Nyaacord");
    let taskbar_msg_name = wide("TaskbarCreated");
    // SAFETY: Win32 hidden message window, hotkey, and tray registration on
    // dedicated thread.
@@ -515,12 +505,12 @@ fn run_tray_loop() {
       }
 
       let mut msg = Msg {
-         hwnd:    ptr::null_mut(),
+         hwnd: ptr::null_mut(),
          message: 0,
-         wparam:  0,
-         lparam:  0,
-         time:    0,
-         pt:      Point { x: 0, y: 0 },
+         wparam: 0,
+         lparam: 0,
+         time: 0,
+         pt: Point { x: 0, y: 0 },
       };
       while GetMessageW(&raw mut msg, ptr::null_mut(), 0, 0) > 0 {
          TranslateMessage(&raw const msg);
@@ -608,7 +598,7 @@ unsafe extern "system" fn tray_wnd_proc(
                unsafe {
                   let menu = CreatePopupMenu();
                   if !menu.is_null() {
-                     let open_lbl = wide("Open NyaaCord Settings\tCtrl+Shift+U");
+                     let open_lbl = wide("Open Nyaacord Settings\tCtrl+Shift+U");
                      let devtools_lbl = wide("Open DevTools (Console)\tCtrl+Shift+I");
                      let reload_lbl = wide("Reload All Plugins");
                      let update_lbl = wide("Check for Updates");
@@ -742,36 +732,36 @@ fn pick_js_path() -> Option<PathBuf> {
    let filter: Vec<u16> = "JavaScript Plugins (*.js)\0*.js\0All Files (*.*)\0*.*\0\0"
       .encode_utf16()
       .collect();
-   let title = wide("Install NyaaCord Plugin (.js)");
+   let title = wide("Install Nyaacord Plugin (.js)");
    let def_ext = wide("js");
    #[expect(
       clippy::cast_possible_truncation,
       reason = "OPENFILENAMEW is 152 bytes"
    )]
    let mut ofn = OpenFileNameW {
-      l_struct_size:       size_of::<OpenFileNameW>() as u32,
-      hwnd_owner:          ptr::null_mut(),
-      h_instance:          ptr::null_mut(),
-      lpstr_filter:        filter.as_ptr(),
+      l_struct_size: size_of::<OpenFileNameW>() as u32,
+      hwnd_owner: ptr::null_mut(),
+      h_instance: ptr::null_mut(),
+      lpstr_filter: filter.as_ptr(),
       lpstr_custom_filter: ptr::null_mut(),
-      n_max_cust_filter:   0,
-      n_filter_index:      1,
-      lpstr_file:          file_buf.as_mut_ptr(),
-      n_max_file:          u32::try_from(file_buf.len()).unwrap_or(32_768),
-      lpstr_file_title:    ptr::null_mut(),
-      n_max_file_title:    0,
-      lpstr_initial_dir:   ptr::null(),
-      lpstr_title:         title.as_ptr(),
-      flags:               OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER,
-      n_file_offset:       0,
-      n_file_extension:    0,
-      lpstr_def_ext:       def_ext.as_ptr(),
-      l_cust_data:         0,
-      lpfn_hook:           ptr::null(),
-      lp_template_name:    ptr::null(),
-      pv_reserved:         ptr::null_mut(),
-      dw_reserved:         0,
-      flags_ex:            0,
+      n_max_cust_filter: 0,
+      n_filter_index: 1,
+      lpstr_file: file_buf.as_mut_ptr(),
+      n_max_file: u32::try_from(file_buf.len()).unwrap_or(32_768),
+      lpstr_file_title: ptr::null_mut(),
+      n_max_file_title: 0,
+      lpstr_initial_dir: ptr::null(),
+      lpstr_title: title.as_ptr(),
+      flags: OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER,
+      n_file_offset: 0,
+      n_file_extension: 0,
+      lpstr_def_ext: def_ext.as_ptr(),
+      l_cust_data: 0,
+      lpfn_hook: ptr::null(),
+      lp_template_name: ptr::null(),
+      pv_reserved: ptr::null_mut(),
+      dw_reserved: 0,
+      flags_ex: 0,
    };
    // SAFETY: all pointers in `ofn` stay valid for the duration of the modal
    // `GetOpenFileNameW` call.

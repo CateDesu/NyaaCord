@@ -4,27 +4,14 @@
 use std::{
    env,
    ffi::OsString,
-   io::{
-      BufRead as _,
-      BufReader,
-      Write as _,
-   },
-   path::PathBuf,
-   process::{
-      Command,
-      Stdio,
-   },
+   io::{BufRead as _, BufReader, Write as _},
+   path::{Path, PathBuf},
+   process::{Command, Stdio},
    sync::Once,
    thread,
 };
 
-use crate::{
-   DesktopHost,
-   Error,
-   TrayAction,
-   config,
-   spawn_reaped,
-};
+use crate::{DesktopHost, Error, TrayAction, config, spawn_reaped};
 
 /// The tray icon as an `AppIndicator` (`StatusNotifierItem`, which KDE shows
 /// natively and GNOME with its `AppIndicator` extension), run by the system
@@ -43,7 +30,7 @@ except (ValueError, ImportError):
     gi.require_version("AppIndicator3", "0.1")
     from gi.repository import AppIndicator3 as AI
 tray = AI.Indicator.new("sunbird", sys.argv[1], AI.IndicatorCategory.APPLICATION_STATUS)
-tray.set_title("NyaaCord")
+tray.set_title("Nyaacord")
 menu = Gtk.Menu()
 for at, label in enumerate(sys.argv[2:]):
     item = Gtk.MenuItem(label=label) if label else Gtk.SeparatorMenuItem()
@@ -133,14 +120,14 @@ impl DesktopHost for Host {
       let mut zenity = Command::new("zenity");
       zenity.args([
          "--file-selection",
-         "--title=Install NyaaCord Plugin (.js)",
+         "--title=Install Nyaacord Plugin (.js)",
          "--file-filter=JavaScript Plugins | *.js",
          "--file-filter=All Files | *",
       ]);
       let mut kdialog = Command::new("kdialog");
       kdialog.args([
          "--title",
-         "Install NyaaCord Plugin (.js)",
+         "Install Nyaacord Plugin (.js)",
          "--getopenfilename",
          ".",
          "*.js|JavaScript Plugins",
@@ -155,14 +142,8 @@ impl DesktopHost for Host {
    }
 
    fn notify(title: &str, body: &str) {
-      let mut send = Command::new("notify-send");
-      send.args(["--app-name=NyaaCord", "--hint=string:desktop-entry:sunbird"]);
-      if let Some(icon) = nyaacord_icon_path() {
-         let mut arg = OsString::from("--icon=");
-         arg.push(&icon);
-         send.arg(arg);
-      }
-      send.args(["--", title, body]);
+      let icon = nyaacord_icon_path();
+      let mut send = notify_command(title, body, icon.as_deref());
       if let Err(err) = spawn_reaped(&mut send) {
          log::debug!("notify: {err}");
       }
@@ -177,12 +158,26 @@ impl DesktopHost for Host {
       STARTED.call_once(|| {
          if let Err(err) = start_indicator() {
             log::info!(
-               "tray: {err}, NyaaCord Settings is at {}",
+               "tray: {err}, Nyaacord Settings is at {}",
                config().map_or("", |config| &config.dashboard_url)
             );
          }
       });
    }
+}
+
+const DESKTOP_ENTRY_HINT: &str = "--hint=string:desktop-entry:com.discord.libdiscord";
+
+fn notify_command(title: &str, body: &str, icon: Option<&Path>) -> Command {
+   let mut send = Command::new("notify-send");
+   send.args(["--app-name=Nyaacord", DESKTOP_ENTRY_HINT]);
+   if let Some(icon) = icon {
+      let mut arg = OsString::from("--icon=");
+      arg.push(icon);
+      send.arg(arg);
+   }
+   send.args(["--", title, body]);
+   send
 }
 
 fn nyaacord_icon_path() -> Option<PathBuf> {
@@ -203,12 +198,10 @@ fn nyaacord_icon_path() -> Option<PathBuf> {
             .map(|home| PathBuf::from(home).join(".local/share"))
       })?;
    let path = data_home.join("sunbird/nyaacord.png");
-   path
-      .is_file()
-      .then(|| path.canonicalize().unwrap_or(path))
+   path.is_file().then(|| path.canonicalize().unwrap_or(path))
 }
 
-/// `NyaaCord`'s icon, then Discord's icon from its `AppImage` or package, else its icon name.
+/// `Nyaacord`'s icon, then Discord's icon from its `AppImage` or package, else its icon name.
 fn icon() -> OsString {
    if let Some(path) = nyaacord_icon_path() {
       return path.into_os_string();
@@ -239,10 +232,8 @@ fn start_indicator() -> Result<(), Error> {
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
       .stderr(Stdio::null());
-   let mut child = python.spawn().map_err(|err| {
-      Error::Platform {
-         message: format!("python3 for the tray: {err}"),
-      }
+   let mut child = python.spawn().map_err(|err| Error::Platform {
+      message: format!("python3 for the tray: {err}"),
    })?;
    let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
       return Err(Error::Platform {
@@ -265,16 +256,50 @@ fn start_indicator() -> Result<(), Error> {
          drop(stdin);
          if child.wait().is_ok_and(|status| !status.success()) {
             log::info!(
-               "tray: needs python3 with GTK 3 and AppIndicator bindings; NyaaCord Settings is at \
+               "tray: needs python3 with GTK 3 and AppIndicator bindings; Nyaacord Settings is at \
                 {}",
                config().map_or("", |config| &config.dashboard_url)
             );
          }
       })
       .map(drop)
-      .map_err(|err| {
-         Error::Platform {
-            message: format!("tray thread: {err}"),
-         }
+      .map_err(|err| Error::Platform {
+         message: format!("tray thread: {err}"),
       })
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   #[test]
+   fn notify_command_uses_discord_desktop_entry_hint() {
+      let with_icon = notify_command("Title", "Body", Some(Path::new("/tmp/nyaacord.png")));
+      let args: Vec<_> = with_icon.get_args().collect();
+      assert_eq!(with_icon.get_program(), "notify-send");
+      assert_eq!(
+         args,
+         vec![
+            "--app-name=Nyaacord",
+            "--hint=string:desktop-entry:com.discord.libdiscord",
+            "--icon=/tmp/nyaacord.png",
+            "--",
+            "Title",
+            "Body",
+         ]
+      );
+
+      let without_icon = notify_command("Title", "Body", None);
+      let args: Vec<_> = without_icon.get_args().collect();
+      assert_eq!(
+         args,
+         vec![
+            "--app-name=Nyaacord",
+            "--hint=string:desktop-entry:com.discord.libdiscord",
+            "--",
+            "Title",
+            "Body",
+         ]
+      );
+   }
 }

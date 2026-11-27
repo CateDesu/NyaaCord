@@ -14,50 +14,25 @@
 use std::{
    borrow::Cow,
    ffi::c_void,
-   panic::{
-      self,
-      AssertUnwindSafe,
-   },
-   ptr,
-   slice,
-   str,
+   panic::{self, AssertUnwindSafe},
+   ptr, slice, str,
    sync::{
-      Arc,
-      OnceLock,
-      atomic::{
-         AtomicPtr,
-         Ordering,
-      },
+      Arc, OnceLock,
+      atomic::{AtomicPtr, Ordering},
    },
 };
 
 use phoenix_hook::image::Image;
 use phoenix_runtime::{
    discord::{
-      Authorization,
-      DiscordError,
-      RequestAction,
-      api_path,
-      observe_request,
-      run_response_hooks,
-      session_request,
-      take_response,
-      track_response,
-      watch_response,
+      Authorization, DiscordError, RequestAction, api_path, observe_request, run_response_hooks,
+      session_request, take_response, track_response, watch_response,
    },
-   fetch::{
-      self,
-      Request,
-      Response,
-   },
+   fetch::{self, Request, Response},
 };
 use phoenix_sigs::{
    desktop,
-   http::{
-      DesktopHttpTransport,
-      POLL_RESULT_SIZE,
-      RequestLayout,
-   },
+   http::{DesktopHttpTransport, POLL_RESULT_SIZE, RequestLayout},
 };
 
 /// Standard HTTP/1.x `http::header::StandardHeader` names in discriminant
@@ -165,45 +140,45 @@ struct RawVec {
 
 #[repr(C)]
 struct RawBytesVtable {
-   clone:     unsafe extern "C" fn(&AtomicPtr<()>, *const u8, usize) -> RawBytes,
-   to_vec:    unsafe extern "C" fn(*mut (), *const u8, usize) -> RawVec,
-   to_mut:    unsafe extern "C" fn(*mut (), *const u8, usize) -> RawBytes,
+   clone: unsafe extern "C" fn(&AtomicPtr<()>, *const u8, usize) -> RawBytes,
+   to_vec: unsafe extern "C" fn(*mut (), *const u8, usize) -> RawVec,
+   to_mut: unsafe extern "C" fn(*mut (), *const u8, usize) -> RawBytes,
    is_unique: unsafe extern "C" fn(&AtomicPtr<()>) -> bool,
-   drop:      unsafe extern "C" fn(*mut (), *const u8, usize),
+   drop: unsafe extern "C" fn(*mut (), *const u8, usize),
 }
 
 #[repr(C)]
 struct RawBytes {
    vtable: *const RawBytesVtable,
-   ptr:    *const u8,
-   len:    usize,
-   data:   AtomicPtr<()>,
+   ptr: *const u8,
+   len: usize,
+   data: AtomicPtr<()>,
 }
 
 #[repr(C)]
 struct RawHeaderBucket {
-   tag:   u64,
+   tag: u64,
    _pad0: [u64; 2],
    value: RawBytes,
    _sens: u64,
-   name:  RawBytes,
+   name: RawBytes,
    _pad1: u64,
 }
 const _: () = assert!(size_of::<RawHeaderBucket>() == 0x68);
 
 #[repr(C)]
 struct RawHeaderMap {
-   _head:       [u64; 3],
+   _head: [u64; 3],
    entries_cap: usize,
    entries_ptr: *const RawHeaderBucket,
    entries_len: usize,
-   _tail:       [u64; 6],
+   _tail: [u64; 6],
 }
 const _: () = assert!(size_of::<RawHeaderMap>() == 0x60);
 
 #[repr(C)]
 struct RawBody {
-   tag:   u64,
+   tag: u64,
    bytes: RawBytes,
    _rest: [u64; 2],
 }
@@ -218,9 +193,9 @@ const _: () = assert!(size_of::<RawMethod>() == 0x18);
 /// A `TransportRequest`'s fields, where [`RequestLayout`] puts them.
 struct RawTransportRequest<'a> {
    headers: &'a RawHeaderMap,
-   body:    &'a mut RawBody,
-   url:     &'a mut RawVec,
-   method:  &'a RawMethod,
+   body: &'a mut RawBody,
+   url: &'a mut RawVec,
+   method: &'a RawMethod,
 }
 
 impl RawTransportRequest<'_> {
@@ -236,9 +211,9 @@ impl RawTransportRequest<'_> {
       unsafe {
          Self {
             headers: &*req.add(layout.headers).cast::<RawHeaderMap>(),
-            body:    &mut *req.add(layout.body).cast::<RawBody>(),
-            url:     &mut *req.add(layout.url).cast::<RawVec>(),
-            method:  &*req.add(layout.method).cast::<RawMethod>(),
+            body: &mut *req.add(layout.body).cast::<RawBody>(),
+            url: &mut *req.add(layout.url).cast::<RawVec>(),
+            method: &*req.add(layout.method).cast::<RawMethod>(),
          }
       }
    }
@@ -247,16 +222,16 @@ impl RawTransportRequest<'_> {
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct RawPinnedFuture {
-   data:   *mut c_void,
+   data: *mut c_void,
    vtable: *const c_void,
 }
 
 #[repr(C)]
 struct RawPollResult {
    headers: [u64; 12],
-   body:    RawVec,
-   status:  u16,
-   _pad:    [u8; 6],
+   body: RawVec,
+   status: u16,
+   _pad: [u8; 6],
 }
 const _: () = assert!(size_of::<RawPollResult>() == POLL_RESULT_SIZE);
 
@@ -280,15 +255,20 @@ impl RawPollResult {
 type SendFn = unsafe fn(*const c_void, *mut u8) -> RawPinnedFuture;
 type PollFn = unsafe fn(*mut c_void, *mut c_void) -> RawPollResult;
 type HostAllocFn = unsafe extern "C" fn(usize, usize) -> *mut u8;
-type HostDeallocFn = unsafe extern "C" fn(*mut u8, usize, usize);
+pub type HostDeallocFn = unsafe extern "C" fn(*mut u8, usize, usize);
+
+#[cfg(windows)]
+pub fn host_dealloc() -> Option<HostDeallocFn> {
+   INSTALLED.get().and_then(|inst| inst.host_dealloc)
+}
 
 struct Installed {
-   send:         SendFn,
-   request:      RequestLayout,
-   poll:         PollFn,
+   send: SendFn,
+   request: RequestLayout,
+   poll: PollFn,
    /// Whether the poll slots are swapped, so responses reach `poll_detour`.
-   responses:    bool,
-   host_alloc:   Option<HostAllocFn>,
+   responses: bool,
+   host_alloc: Option<HostAllocFn>,
    host_dealloc: Option<HostDeallocFn>,
 }
 
@@ -299,11 +279,11 @@ static INSTALLED: OnceLock<Installed> = OnceLock::new();
 // ---------------------------------------------------------------------------
 
 static OWNED_BYTES_VTABLE: RawBytesVtable = RawBytesVtable {
-   clone:     owned_bytes_clone,
-   to_vec:    owned_bytes_to_vec,
-   to_mut:    owned_bytes_to_mut,
+   clone: owned_bytes_clone,
+   to_vec: owned_bytes_to_vec,
+   to_mut: owned_bytes_to_mut,
    is_unique: owned_bytes_is_unique,
-   drop:      owned_bytes_drop,
+   drop: owned_bytes_drop,
 };
 
 fn make_owned_bytes(data: Vec<u8>) -> RawBytes {
@@ -754,11 +734,9 @@ fn observe(method: &str, url: &str, headers: &[(String, String)], body: &[u8]) -
    match sent {
       RequestAction::Pass => observe_request(method, url, headers, body),
       RequestAction::Drop => RequestAction::Drop,
-      RequestAction::Replace(sent) => {
-         match observe_request(method, url, headers, &sent) {
-            RequestAction::Pass => RequestAction::Replace(sent),
-            hooked => hooked,
-         }
+      RequestAction::Replace(sent) => match observe_request(method, url, headers, &sent) {
+         RequestAction::Pass => RequestAction::Replace(sent),
+         hooked => hooked,
       },
    }
 }
@@ -776,11 +754,9 @@ pub fn send(
       headers: merged,
       body: (!body.is_empty()).then_some(body),
    };
-   fetch::send(&request).map_err(|err| {
-      DiscordError::Network {
-         path:    path.to_owned(),
-         message: err.to_string(),
-      }
+   fetch::send(&request).map_err(|err| DiscordError::Network {
+      path: path.to_owned(),
+      message: err.to_string(),
    })
 }
 

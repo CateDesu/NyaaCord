@@ -12,35 +12,17 @@ use std::{
    ffi::c_void,
    mem::MaybeUninit,
    ptr,
-   sync::{
-      LazyLock,
-      Mutex,
-      OnceLock,
-      PoisonError,
-   },
+   sync::{LazyLock, Mutex, OnceLock, PoisonError},
 };
 
 use phoenix_hook::image::Image;
 use phoenix_runtime::{
-   Chosen,
-   Control,
-   update::{
-      self,
-      Catalog,
-      Listed,
-   },
+   Chosen, Control,
+   update::{self, Catalog, Listed},
 };
-use phoenix_sigs::desktop::{
-   self,
-   GpuiLayout,
-   StyleOffsets,
-   layout,
-};
+use phoenix_sigs::desktop::{self, GpuiLayout, StyleOffsets, layout};
 
-use crate::modal::{
-   FieldKind,
-   SettingField,
-};
+use crate::modal::{FieldKind, SettingField};
 
 /// `gpui::SharedString` (24 bytes): tag `0x18` is `Static(&'static str)` and
 /// `0x19` is `Arc<str>`, the `ArcInner` at `ptr` with the bytes at `+0x10`.
@@ -48,7 +30,7 @@ use crate::modal::{
 #[repr(C)]
 pub struct SharedString {
    pub tag: u8,
-   _pad:    [u8; 7],
+   _pad: [u8; 7],
    pub ptr: *const u8,
    pub len: usize,
 }
@@ -56,10 +38,10 @@ pub struct SharedString {
 impl SharedString {
    pub const fn from_static(s: &'static str) -> Self {
       Self {
-         tag:  0x18,
+         tag: 0x18,
          _pad: [0; 7],
-         ptr:  s.as_ptr(),
-         len:  s.len(),
+         ptr: s.as_ptr(),
+         len: s.len(),
       }
    }
 
@@ -85,10 +67,10 @@ impl SharedString {
          ptr::copy_nonoverlapping(s.as_ptr(), inner.add(16), s.len());
       }
       Self {
-         tag:  0x19,
+         tag: 0x19,
          _pad: [0; 7],
-         ptr:  inner.cast_const(),
-         len:  s.len(),
+         ptr: inner.cast_const(),
+         len: s.len(),
       }
    }
 }
@@ -151,20 +133,20 @@ pub struct RawAnyElement([u8; layout::ANY_ELEMENT]);
 
 #[repr(C)]
 pub struct RcInner {
-   strong:    usize,
-   weak:      usize,
+   strong: usize,
+   weak: usize,
    action_id: u64,
 }
 
 #[repr(C)]
 pub struct RcFnVtbl {
    pub drop_in_place: *const c_void,
-   pub size:          usize,
-   pub align:         usize,
-   pub call_once:     *const c_void,
-   pub call_mut:      *const c_void,
-   pub call:          *const c_void,
-   pub extra:         *const c_void,
+   pub size: usize,
+   pub align: usize,
+   pub call_once: *const c_void,
+   pub call_mut: *const c_void,
+   pub call: *const c_void,
+   pub extra: *const c_void,
 }
 
 // SAFETY: vtables contain only function pointers and plain integers.
@@ -172,36 +154,36 @@ unsafe impl Sync for RcFnVtbl {}
 
 static SWITCH_FN_VTBL: RcFnVtbl = RcFnVtbl {
    drop_in_place: ptr::null(),
-   size:          size_of::<u64>(),
-   align:         align_of::<u64>(),
-   call_once:     switch_callback as *const c_void,
-   call_mut:      switch_callback as *const c_void,
-   call:          switch_callback as *const c_void,
-   extra:         ptr::null(),
+   size: size_of::<u64>(),
+   align: align_of::<u64>(),
+   call_once: switch_callback as *const c_void,
+   call_mut: switch_callback as *const c_void,
+   call: switch_callback as *const c_void,
+   extra: ptr::null(),
 };
 
 static BUTTON_FN_VTBL: RcFnVtbl = RcFnVtbl {
    drop_in_place: ptr::null(),
-   size:          size_of::<u64>(),
-   align:         align_of::<u64>(),
-   call_once:     button_callback as *const c_void,
-   call_mut:      button_callback as *const c_void,
-   call:          button_callback as *const c_void,
-   extra:         ptr::null(),
+   size: size_of::<u64>(),
+   align: align_of::<u64>(),
+   call_once: button_callback as *const c_void,
+   call_mut: button_callback as *const c_void,
+   call: button_callback as *const c_void,
+   extra: ptr::null(),
 };
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub enum BtnVariant {
-   Primary   = 0,
+   Primary = 0,
    Secondary = 1,
-   Critical  = 3,
+   Critical = 3,
 }
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub enum BtnSize {
-   Small  = 1,
+   Small = 1,
    Medium = 2,
 }
 
@@ -239,23 +221,23 @@ type ActionRowFn = unsafe extern "C" fn(
 type AllocOrOomFn = unsafe extern "C" fn(usize, usize) -> *mut u8;
 
 struct GpuiSymbols {
-   caller_loc:       *const c_void,
-   div_new:          DivNewFn,
-   div_flex:         DivMutFn,
-   div_flex_col:     DivMutFn,
-   div_style_mut:    DivStyleMutFn,
-   div_child_div:    DivChildDivFn,
+   caller_loc: *const c_void,
+   div_new: DivNewFn,
+   div_flex: DivMutFn,
+   div_flex_col: DivMutFn,
+   div_style_mut: DivStyleMutFn,
+   div_child_div: DivChildDivFn,
    div_child_button: DivChildBtnFn,
-   div_into_any:     DivIntoAnyFn,
-   div_push_any:     Option<DivPushAnyFn>,
-   str_into_any:     Option<StrIntoAnyFn>,
-   text_block:       TextBlockFn,
-   switch_new:       SwitchNewFn,
-   switch_into_div:  SwitchIntoDivFn,
-   button_new:       ButtonNewFn,
-   action_row:       ActionRowFn,
-   alloc_or_oom:     AllocOrOomFn,
-   layout:           GpuiLayout,
+   div_into_any: DivIntoAnyFn,
+   div_push_any: Option<DivPushAnyFn>,
+   str_into_any: Option<StrIntoAnyFn>,
+   text_block: TextBlockFn,
+   switch_new: SwitchNewFn,
+   switch_into_div: SwitchIntoDivFn,
+   button_new: ButtonNewFn,
+   action_row: ActionRowFn,
+   alloc_or_oom: AllocOrOomFn,
+   layout: GpuiLayout,
 }
 
 // SAFETY: function pointers and static `.rdata` `Location` pointer in
@@ -284,25 +266,25 @@ enum PluginFilter {
 }
 
 struct UiState {
-   tab:              Tab,
-   filter:           PluginFilter,
+   tab: Tab,
+   filter: PluginFilter,
    expanded_plugins: HashSet<String>,
-   open_select:      Option<(String, String)>,
+   open_select: Option<(String, String)>,
    cat_desktop_open: bool,
    cat_partial_open: bool,
-   cat_mobile_open:  bool,
+   cat_mobile_open: bool,
 }
 
 impl Default for UiState {
    fn default() -> Self {
       Self {
-         tab:              Tab::Plugins,
-         filter:           PluginFilter::All,
+         tab: Tab::Plugins,
+         filter: PluginFilter::All,
          expanded_plugins: HashSet::new(),
-         open_select:      None,
+         open_select: None,
          cat_desktop_open: true,
          cat_partial_open: false,
-         cat_mobile_open:  false,
+         cat_mobile_open: false,
       }
    }
 }
@@ -316,12 +298,12 @@ enum Action {
    ToggleExpandPlugin(String),
    ToggleSelectDropdown {
       plugin: String,
-      key:    String,
+      key: String,
    },
    PickSelectOption {
       plugin: String,
-      key:    String,
-      value:  String,
+      key: String,
+      value: String,
    },
    ToggleCatalogGroup(u8),
    ToggleStaff,
@@ -339,11 +321,11 @@ enum Action {
    UninstallPlugin(String),
    ToggleSetting {
       plugin: String,
-      key:    String,
+      key: String,
    },
    PressButton {
       plugin: String,
-      key:    String,
+      key: String,
    },
    InstallCatalog(String),
 }
@@ -491,24 +473,34 @@ unsafe extern "C" fn button_callback(
                }
             });
          },
-         Action::UninstallPlugin(name) => {
-            if let Err(err) = phoenix_runtime::uninstall(&name) {
+         Action::UninstallPlugin(name) => match phoenix_runtime::uninstall(&name) {
+            Ok(phoenix_runtime::Removed::Restored) => {
+               log::info!("nyaacord settings: restored bundled {name}");
+               phoenix_ui_desktop::toast(&format!("Restored bundled {name}"));
+               crate::modal::force_redraw();
+            },
+            Ok(phoenix_runtime::Removed::Removed) => {
+               log::info!("nyaacord settings: removed {name}");
+               phoenix_ui_desktop::toast(&format!("Removed {name}"));
+               crate::modal::force_redraw();
+            },
+            Err(err) => {
                log::warn!("nyaacord settings: uninstall {name}: {err}");
-            }
+               phoenix_ui_desktop::toast(&format!("Remove failed: {err}"));
+            },
          },
          Action::PressButton { plugin, key } => phoenix_runtime::press(&plugin, &key),
          Action::InstallCatalog(name) => {
-            std::thread::spawn(move || {
-               match update::install_listed(&name) {
-                  Ok(installed) => {
-                     log::info!("nyaacord settings: installed {installed}");
-                     phoenix_ui_desktop::toast(&format!("Installed {installed}"));
-                  },
-                  Err(err) => {
-                     log::warn!("nyaacord settings: install {name}: {err}");
-                     phoenix_ui_desktop::toast(&format!("Install failed: {err}"));
-                  },
-               }
+            std::thread::spawn(move || match update::install_listed(&name) {
+               Ok(installed) => {
+                  log::info!("nyaacord settings: installed {installed}");
+                  phoenix_ui_desktop::toast(&format!("Installed {installed}"));
+                  crate::modal::force_redraw();
+               },
+               Err(err) => {
+                  log::warn!("nyaacord settings: install {name}: {err}");
+                  phoenix_ui_desktop::toast(&format!("Install failed: {err}"));
+               },
             });
          },
          _ => {},
@@ -560,25 +552,23 @@ pub fn locate(image: &Image<'static>) -> bool {
    // their layouts match `layout`, and they have these Rust-ABI signatures.
    let symbols = unsafe {
       GpuiSymbols {
-         caller_loc:       caller_loc as *const c_void,
-         div_new:          std::mem::transmute::<usize, DivNewFn>(div_new),
-         div_flex:         std::mem::transmute::<usize, DivMutFn>(div_flex),
-         div_flex_col:     std::mem::transmute::<usize, DivMutFn>(div_flex_col),
-         div_style_mut:    std::mem::transmute::<usize, DivStyleMutFn>(div_style_mut),
-         div_child_div:    std::mem::transmute::<usize, DivChildDivFn>(div_child_div),
+         caller_loc: caller_loc as *const c_void,
+         div_new: std::mem::transmute::<usize, DivNewFn>(div_new),
+         div_flex: std::mem::transmute::<usize, DivMutFn>(div_flex),
+         div_flex_col: std::mem::transmute::<usize, DivMutFn>(div_flex_col),
+         div_style_mut: std::mem::transmute::<usize, DivStyleMutFn>(div_style_mut),
+         div_child_div: std::mem::transmute::<usize, DivChildDivFn>(div_child_div),
          div_child_button: std::mem::transmute::<usize, DivChildBtnFn>(div_child_button),
-         div_into_any:     std::mem::transmute::<usize, DivIntoAnyFn>(div_into_any),
-         div_push_any:     div_push_any
-            .map(|addr| std::mem::transmute::<usize, DivPushAnyFn>(addr)),
-         str_into_any:     str_into_any
-            .map(|addr| std::mem::transmute::<usize, StrIntoAnyFn>(addr)),
-         text_block:       std::mem::transmute::<usize, TextBlockFn>(text_block),
-         switch_new:       std::mem::transmute::<usize, SwitchNewFn>(switch_new),
-         switch_into_div:  std::mem::transmute::<usize, SwitchIntoDivFn>(switch_into_div),
-         button_new:       std::mem::transmute::<usize, ButtonNewFn>(button_new),
-         action_row:       std::mem::transmute::<usize, ActionRowFn>(action_row),
-         alloc_or_oom:     std::mem::transmute::<usize, AllocOrOomFn>(alloc_or_oom),
-         layout:           found_layout,
+         div_into_any: std::mem::transmute::<usize, DivIntoAnyFn>(div_into_any),
+         div_push_any: div_push_any.map(|addr| std::mem::transmute::<usize, DivPushAnyFn>(addr)),
+         str_into_any: str_into_any.map(|addr| std::mem::transmute::<usize, StrIntoAnyFn>(addr)),
+         text_block: std::mem::transmute::<usize, TextBlockFn>(text_block),
+         switch_new: std::mem::transmute::<usize, SwitchNewFn>(switch_new),
+         switch_into_div: std::mem::transmute::<usize, SwitchIntoDivFn>(switch_into_div),
+         button_new: std::mem::transmute::<usize, ButtonNewFn>(button_new),
+         action_row: std::mem::transmute::<usize, ActionRowFn>(action_row),
+         alloc_or_oom: std::mem::transmute::<usize, AllocOrOomFn>(alloc_or_oom),
+         layout: found_layout,
       }
    };
    let _ = SYMBOLS.set(symbols);
@@ -606,7 +596,7 @@ pub fn layout() -> Option<&'static GpuiLayout> {
 
 /// A `Div`'s `StyleRefinement`, written through the decoded field offsets.
 pub struct Style {
-   ptr:    *mut u8,
+   ptr: *mut u8,
    pub at: &'static StyleOffsets,
 }
 
@@ -688,8 +678,8 @@ impl Builder {
          let raw = (self.sym.alloc_or_oom)(align_of::<RcInner>(), size_of::<RcInner>());
          let inner = raw.cast::<RcInner>();
          inner.write(RcInner {
-            strong:    1,
-            weak:      1,
+            strong: 1,
+            weak: 1,
             action_id: id,
          });
          inner
@@ -978,6 +968,31 @@ pub fn push_any(parent: &mut RawDiv, child: &mut RawAnyElement) -> bool {
    Builder { sym }.push_any(parent, child)
 }
 
+/// Pushes an `AnyElement` directly into an existing `Div`'s
+/// `SmallVec<[AnyElement; 2]>` children buffer using Discord's own pusher.
+///
+/// # Safety
+/// `smallvec` must point to a live `SmallVec<[AnyElement; 2]>` inside a valid
+/// GPUI `Div`.
+pub unsafe fn push_any_to_smallvec(smallvec: *mut c_void, child: &mut RawAnyElement) -> bool {
+   let Some(push) = SYMBOLS.get().and_then(|sym| sym.div_push_any) else {
+      return false;
+   };
+   // SAFETY: caller guarantees `smallvec` is a valid `SmallVec<[AnyElement; 2]>`.
+   unsafe { push(smallvec, child) };
+   true
+}
+
+/// Allocates `size` bytes with `align` on Discord's own heap so Discord's drop
+/// glue frees it with the matching allocator.
+pub fn alloc_discord(align: usize, size: usize) -> *mut u8 {
+   let Some(sym) = SYMBOLS.get() else {
+      return ptr::null_mut();
+   };
+   // SAFETY: calls Discord's resolved `alloc_or_oom(align, size)`.
+   unsafe { (sym.alloc_or_oom)(align, size) }
+}
+
 pub fn str_to_any(text: &str) -> Option<RawAnyElement> {
    let str_into_any = SYMBOLS.get()?.str_into_any?;
    let mut ss = SharedString::from_str(text);
@@ -1101,8 +1116,8 @@ pub fn alloc_rc_u64(value: u64) -> Option<*mut RcInner> {
          return None;
       }
       ptr.write(RcInner {
-         strong:    1,
-         weak:      1,
+         strong: 1,
+         weak: 1,
          action_id: value,
       });
       Some(ptr)
@@ -1191,7 +1206,7 @@ pub fn wrap_with_accessories(
 }
 
 // ---------------------------------------------------------------------------
-// NyaaCord settings page
+// Nyaacord settings page
 // ---------------------------------------------------------------------------
 
 const DESKTOP_FULL: &[&str] = &[
@@ -1258,7 +1273,7 @@ impl DesktopCompat {
    }
 }
 
-/// Renders the categorized native `NyaaCord` settings page into `sret`.
+/// Renders the categorized native `Nyaacord` settings page into `sret`.
 pub fn render_sunbird_page(sret: *mut RawAnyElement) -> bool {
    let Some(sym) = SYMBOLS.get() else {
       return false;
@@ -1295,7 +1310,7 @@ pub fn render_sunbird_page(sret: *mut RawAnyElement) -> bool {
       update::app_version(),
       plugins.len()
    );
-   root = b.push_div(root, b.text_block("NyaaCord", &summary));
+   root = b.push_div(root, b.text_block("Nyaacord", &summary));
 
    let variant_for = |t: Tab| {
       if tab == t {
@@ -1441,12 +1456,10 @@ fn render_plugins_tab(
 
    let filtered: Vec<&phoenix_runtime::PluginInfo> = plugins
       .iter()
-      .filter(|p| {
-         match filter {
-            PluginFilter::All => true,
-            PluginFilter::Enabled => p.enabled,
-            PluginFilter::Disabled => !p.enabled,
-         }
+      .filter(|p| match filter {
+         PluginFilter::All => true,
+         PluginFilter::Enabled => p.enabled,
+         PluginFilter::Disabled => !p.enabled,
       })
       .collect();
 
@@ -1551,7 +1564,16 @@ fn render_plugins_tab(
             Action::ReloadPlugin(plugin.name.clone()),
          );
       }
-      if !plugin.enabled && plugin.installed {
+      if plugin.installed && plugin.bundled {
+         buttons = b.push_button(
+            buttons,
+            &format!("sunbird-restore-{}", plugin.name),
+            "Restore",
+            BtnVariant::Secondary,
+            BtnSize::Small,
+            Action::UninstallPlugin(plugin.name.clone()),
+         );
+      } else if !plugin.enabled && plugin.installed {
          buttons = b.push_button(
             buttons,
             &format!("sunbird-remove-{}", plugin.name),
@@ -1611,7 +1633,7 @@ fn render_plugins_tab(
                         *val,
                         Action::ToggleSetting {
                            plugin: plugin.name.clone(),
-                           key:    setting.key.clone(),
+                           key: setting.key.clone(),
                         },
                      ),
                   );
@@ -1643,7 +1665,7 @@ fn render_plugins_tab(
                         BtnSize::Small,
                         Action::ToggleSelectDropdown {
                            plugin: plugin.name.clone(),
-                           key:    setting.key.clone(),
+                           key: setting.key.clone(),
                         },
                      ),
                   );
@@ -1668,8 +1690,8 @@ fn render_plugins_tab(
                            BtnSize::Small,
                            Action::PickSelectOption {
                               plugin: plugin.name.clone(),
-                              key:    setting.key.clone(),
-                              value:  opt.value.clone(),
+                              key: setting.key.clone(),
+                              value: opt.value.clone(),
                            },
                         );
                      }
@@ -1688,7 +1710,7 @@ fn render_plugins_tab(
                         BtnSize::Small,
                         Action::PressButton {
                            plugin: plugin.name.clone(),
-                           key:    setting.key.clone(),
+                           key: setting.key.clone(),
                         },
                      ),
                   );
@@ -1975,12 +1997,12 @@ fn render_general_tab(b: &Builder, mut root: RawDiv) -> RawDiv {
 }
 
 struct UpdateCardRow {
-   id:       &'static str,
-   title:    &'static str,
+   id: &'static str,
+   title: &'static str,
    subtitle: String,
-   button:   String,
-   variant:  BtnVariant,
-   action:   Action,
+   button: String,
+   variant: BtnVariant,
+   action: Action,
 }
 
 fn updates_card_state() -> Vec<UpdateCardRow> {
@@ -2008,12 +2030,12 @@ fn build_updates_card_rows(
    let cur = current_version.trim_start_matches(['v', 'V']);
    if busy {
       return vec![UpdateCardRow {
-         id:       "sunbird-updates",
-         title:    "NyaaCord Updates",
+         id: "sunbird-updates",
+         title: "Nyaacord Updates",
          subtitle: status.unwrap_or_else(|| "Checking for updates...".to_owned()),
-         button:   "Working...".to_owned(),
-         variant:  BtnVariant::Secondary,
-         action:   Action::CheckUpdates,
+         button: "Working...".to_owned(),
+         variant: BtnVariant::Secondary,
+         action: Action::CheckUpdates,
       }];
    }
    if let Some(found) = found {
@@ -2023,32 +2045,32 @@ fn build_updates_card_rows(
          let version = raw_version.trim_start_matches(['v', 'V']);
          let subtitle = if found.plugins.is_empty() {
             format!(
-               "NyaaCord v{version} is available. Replaces the AppImage and preserves settings \
+               "Nyaacord v{version} is available. Replaces the AppImage and preserves settings \
                 and plugins."
             )
          } else {
             format!(
-               "NyaaCord v{version} and plugin updates ({}) are available. Replaces the AppImage \
+               "Nyaacord v{version} and plugin updates ({}) are available. Replaces the AppImage \
                 and preserves settings and plugins.",
                found.plugins.join(", ")
             )
          };
          return vec![
             UpdateCardRow {
-               id:       "sunbird-updates-apply",
-               title:    "NyaaCord Updates",
+               id: "sunbird-updates-apply",
+               title: "Nyaacord Updates",
                subtitle,
-               button:   format!("Update to v{version}"),
-               variant:  BtnVariant::Primary,
-               action:   Action::ApplyUpdates,
+               button: format!("Update to v{version}"),
+               variant: BtnVariant::Primary,
+               action: Action::ApplyUpdates,
             },
             UpdateCardRow {
-               id:       "sunbird-updates",
-               title:    "Check for Updates",
+               id: "sunbird-updates",
+               title: "Check for Updates",
                subtitle: status.unwrap_or_else(|| format!("Installed version: v{cur}")),
-               button:   "Check for Updates".to_owned(),
-               variant:  BtnVariant::Secondary,
-               action:   Action::CheckUpdates,
+               button: "Check for Updates".to_owned(),
+               variant: BtnVariant::Secondary,
+               action: Action::CheckUpdates,
             },
          ];
       }
@@ -2058,49 +2080,49 @@ fn build_updates_card_rows(
             |raw_version| {
                let version = raw_version.trim_start_matches(['v', 'V']);
                format!(
-                  "Plugin updates ready: {} · NyaaCord v{version} available",
+                  "Plugin updates ready: {} · Nyaacord v{version} available",
                   found.plugins.join(", ")
                )
             },
          );
          return vec![
             UpdateCardRow {
-               id:       "sunbird-updates-apply",
-               title:    "NyaaCord Updates",
+               id: "sunbird-updates-apply",
+               title: "Nyaacord Updates",
                subtitle,
-               button:   "Apply Updates".to_owned(),
-               variant:  BtnVariant::Primary,
-               action:   Action::ApplyUpdates,
+               button: "Apply Updates".to_owned(),
+               variant: BtnVariant::Primary,
+               action: Action::ApplyUpdates,
             },
             UpdateCardRow {
-               id:       "sunbird-updates",
-               title:    "Check for Updates",
+               id: "sunbird-updates",
+               title: "Check for Updates",
                subtitle: status.unwrap_or_else(|| format!("Installed version: v{cur}")),
-               button:   "Check for Updates".to_owned(),
-               variant:  BtnVariant::Secondary,
-               action:   Action::CheckUpdates,
+               button: "Check for Updates".to_owned(),
+               variant: BtnVariant::Secondary,
+               action: Action::CheckUpdates,
             },
          ];
       }
       if let Some(raw_version) = &found.loader {
          let version = raw_version.trim_start_matches(['v', 'V']);
          return vec![UpdateCardRow {
-            id:       "sunbird-updates",
-            title:    "NyaaCord Updates",
-            subtitle: status.unwrap_or_else(|| format!("NyaaCord v{version} is available.")),
-            button:   "Check for Updates".to_owned(),
-            variant:  BtnVariant::Secondary,
-            action:   Action::CheckUpdates,
+            id: "sunbird-updates",
+            title: "Nyaacord Updates",
+            subtitle: status.unwrap_or_else(|| format!("Nyaacord v{version} is available.")),
+            button: "Check for Updates".to_owned(),
+            variant: BtnVariant::Secondary,
+            action: Action::CheckUpdates,
          }];
       }
    }
    vec![UpdateCardRow {
-      id:       "sunbird-updates",
-      title:    "NyaaCord Updates",
-      subtitle: status.unwrap_or_else(|| format!("NyaaCord v{cur} is up to date.")),
-      button:   "Check for Updates".to_owned(),
-      variant:  BtnVariant::Secondary,
-      action:   Action::CheckUpdates,
+      id: "sunbird-updates",
+      title: "Nyaacord Updates",
+      subtitle: status.unwrap_or_else(|| format!("Nyaacord v{cur} is up to date.")),
+      button: "Check for Updates".to_owned(),
+      variant: BtnVariant::Secondary,
+      action: Action::CheckUpdates,
    }]
 }
 
@@ -2116,7 +2138,7 @@ mod tests {
          "0.1.0",
          true,
          true,
-         Some("Downloading NyaaCord v0.2.0 (45%)...".to_owned()),
+         Some("Downloading Nyaacord v0.2.0 (45%)...".to_owned()),
          None,
       );
       assert_eq!(busy.len(), 1);
@@ -2124,24 +2146,24 @@ mod tests {
       assert!(busy[0].subtitle.contains("45%"));
 
       let release_update = update::Update {
-         loader:      Some("0.2.0".to_owned()),
-         plugins:     Vec::new(),
+         loader: Some("0.2.0".to_owned()),
+         plugins: Vec::new(),
          plugin_crcs: BTreeMap::new(),
-         release:     Some(update::AppRelease {
-            version:      "0.2.0".to_owned(),
-            tag_name:     "v0.2.0".to_owned(),
-            asset_name:   "NyaaCord-x86_64.AppImage".to_owned(),
-            download_url: "https://example.com/NyaaCord-x86_64.AppImage".to_owned(),
-            size:         1024,
-            sha256:       "a".repeat(64),
-            release_url:  "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0".to_owned(),
+         release: Some(update::AppRelease {
+            version: "0.2.0".to_owned(),
+            tag_name: "v0.2.0".to_owned(),
+            asset_name: "Nyaacord-x86_64.AppImage".to_owned(),
+            download_url: "https://example.com/Nyaacord-x86_64.AppImage".to_owned(),
+            size: 1024,
+            sha256: "a".repeat(64),
+            release_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0".to_owned(),
          }),
       };
       let available = build_updates_card_rows(
          "0.1.0",
          false,
          true,
-         Some("Update failed: /opt/NyaaCord.AppImage: target directory is not writable".to_owned()),
+         Some("Update failed: /opt/Nyaacord.AppImage: target directory is not writable".to_owned()),
          Some(&release_update),
       );
       assert_eq!(available.len(), 2);
@@ -2152,8 +2174,7 @@ mod tests {
       assert!(available[1].subtitle.contains("not writable"));
       assert!(matches!(available[1].action, Action::CheckUpdates));
 
-      let read_only =
-         build_updates_card_rows("0.1.0", false, false, None, Some(&release_update));
+      let read_only = build_updates_card_rows("0.1.0", false, false, None, Some(&release_update));
       assert_eq!(read_only.len(), 1);
       assert_eq!(read_only[0].button, "Check for Updates");
       assert!(read_only[0].subtitle.contains("0.2.0"));
@@ -2161,6 +2182,6 @@ mod tests {
       let current = build_updates_card_rows("0.1.0", false, true, None, None);
       assert_eq!(current.len(), 1);
       assert_eq!(current[0].button, "Check for Updates");
-      assert_eq!(current[0].subtitle, "NyaaCord v0.1.0 is up to date.");
+      assert_eq!(current[0].subtitle, "Nyaacord v0.1.0 is up to date.");
    }
 }

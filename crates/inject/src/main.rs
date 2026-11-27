@@ -1,4 +1,4 @@
-//! `NyaaCord-x86_64.exe`, the self-contained Windows launcher, also usable as
+//! `Nyaacord-x86_64.exe`, the self-contained Windows launcher, also usable as
 //! `phoenix-inject [phoenix.dll] [-- discord args]`.
 //!
 //! `Discord.exe` resolves its imports from System32 only (`DependentLoadFlags`
@@ -9,7 +9,7 @@
 //!
 //! Without a DLL argument it installs itself, `phoenix.dll`,
 //! `libplm.plugins.so`, and any bundled Discord Phoenix client into
-//! `%LOCALAPPDATA%\NyaaCord` with Start Menu and Desktop shortcuts. User data
+//! `%LOCALAPPDATA%\Nyaacord` with Start Menu and Desktop shortcuts. User data
 //! and settings in `%LOCALAPPDATA%\DiscordPhoenix` stay untouched across
 //! updates and uninstalls. `--uninstall` removes the install and shortcuts.
 
@@ -35,19 +35,19 @@ mod embedded {
 const VERSION: &str = env!("NYAACORD_VERSION");
 
 const USAGE: &str = "\
-Usage: NyaaCord-x86_64.exe [options] [-- Discord arguments]
+Usage: Nyaacord-x86_64.exe [options] [-- Discord arguments]
 
 Options:
-  --install-only        Install to %LOCALAPPDATA%\\NyaaCord and create shortcuts without launching
-  --check-update        Check GitHub Releases for a newer NyaaCord release
-  --update              Download, verify, and replace NyaaCord with the latest release
-  --rollback            Restore the previous NyaaCord backup
-  --uninstall           Remove shortcuts and %LOCALAPPDATA%\\NyaaCord
+  --install-only        Install to %LOCALAPPDATA%\\Nyaacord and create shortcuts without launching
+  --check-update        Check GitHub Releases for a newer Nyaacord release
+  --update              Download, verify, and replace Nyaacord with the latest release
+  --rollback            Restore the previous Nyaacord backup
+  --uninstall           Remove shortcuts and %LOCALAPPDATA%\\Nyaacord
   --no-runtime          Launch Discord with only the access gate opened
   --gate-only           Alias for --no-runtime
   --target-exe <path>   Override the Discord.exe path (or set NYAACORD_DISCORD_EXE)
   --quiet, -q           Suppress status messages and modal dialogs
-  --version             Print NyaaCord version
+  --version             Print Nyaacord version
   --help, -h            Show this help message";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -416,7 +416,7 @@ fn main() {
       Ok(CliOptions {
          mode: Mode::Version,
          ..
-      }) => println!("NyaaCord {VERSION}"),
+      }) => println!("Nyaacord {VERSION}"),
       Ok(CliOptions {
          mode: Mode::Help, ..
       }) => println!("{USAGE}"),
@@ -433,27 +433,42 @@ fn main() {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bundled client helpers run on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bundled client helpers run on Windows and in tests"
+   )
 )]
 const CLIENT_STAMP_ENTRY: &str = "nyaacord-client.stamp";
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bundled client helpers run on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bundled client helpers run on Windows and in tests"
+   )
 )]
 const CLIENT_STAMP_FILE: &str = "client-stamp.txt";
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bundled client helpers run on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bundled client helpers run on Windows and in tests"
+   )
 )]
 const CLIENT_DIR_NAME: &str = "app";
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bundled client helpers run on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bundled client helpers run on Windows and in tests"
+   )
 )]
 const CLIENT_EXE_NAME: &str = "Discord.exe";
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bundled client helpers run on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bundled client helpers run on Windows and in tests"
+   )
 )]
 const MAX_STAMP_BYTES: usize = 128;
 
@@ -468,12 +483,38 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
    allow(dead_code, reason = "install home helper used on Windows and in tests")
 )]
 fn install_home_in(local: &Path) -> PathBuf {
-   local.join("NyaaCord")
+   local.join("Nyaacord")
 }
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "legacy client path helper used on Windows and in tests")
+   allow(dead_code, reason = "version sync helper used on Windows and in tests")
+)]
+fn version_needs_sync(dir: &Path, version: &str) -> bool {
+   let want = format!("{version}\n");
+   std::fs::read_to_string(dir.join("version.txt"))
+      .ok()
+      .as_deref()
+      != Some(want.as_str())
+}
+
+#[cfg_attr(
+   not(any(windows, test)),
+   allow(
+      dead_code,
+      reason = "shortcut refresh helper used on Windows and in tests"
+   )
+)]
+const fn should_refresh_shortcuts(copied: bool, assets_changed: bool) -> bool {
+   copied || assets_changed
+}
+
+#[cfg_attr(
+   not(any(windows, test)),
+   allow(
+      dead_code,
+      reason = "legacy client path helper used on Windows and in tests"
+   )
 )]
 fn legacy_discord_exe_in(local: &Path) -> PathBuf {
    local
@@ -484,7 +525,10 @@ fn legacy_discord_exe_in(local: &Path) -> PathBuf {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bundled client path helper used on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bundled client path helper used on Windows and in tests"
+   )
 )]
 fn bundled_discord_exe_in(local: &Path) -> PathBuf {
    install_home_in(local)
@@ -494,7 +538,10 @@ fn bundled_discord_exe_in(local: &Path) -> PathBuf {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "path matching helper used on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "path matching helper used on Windows and in tests"
+   )
 )]
 fn paths_equal(a: &Path, b: &Path) -> bool {
    if a == b {
@@ -517,7 +564,7 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 }
 
 /// Returns the target Discord executable path first, followed by the alternate
-/// known NyaaCord/DiscordPhoenix install path when `exe` is one of the two and
+/// known Nyaacord/DiscordPhoenix install path when `exe` is one of the two and
 /// was not explicitly overridden.
 #[cfg_attr(
    not(any(windows, test)),
@@ -553,7 +600,10 @@ fn unique_sibling(dir: &Path, base: &str, tag: &str) -> PathBuf {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bundled client cleanup runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bundled client cleanup runs on Windows and in tests"
+   )
 )]
 fn is_old_client_dir(name: &str, prefix: &str) -> bool {
    name.starts_with(prefix)
@@ -564,7 +614,10 @@ fn is_old_client_dir(name: &str, prefix: &str) -> bool {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bundled client cleanup runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bundled client cleanup runs on Windows and in tests"
+   )
 )]
 fn cleanup_old_dirs(dir: &Path, base: &str) {
    let prefix = format!("{base}.");
@@ -584,7 +637,10 @@ fn cleanup_old_dirs(dir: &Path, base: &str) {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "install file cleanup runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "install file cleanup runs on Windows and in tests"
+   )
 )]
 fn cleanup_old_files(dir: &Path, base: &str) {
    let prefix = format!("{base}.");
@@ -608,12 +664,14 @@ fn cleanup_old_files(dir: &Path, base: &str) {
    allow(dead_code, reason = "install lock helper runs on Windows and in tests")
 )]
 fn acquire_install_lock(dir: &Path) -> misstep::Result<phoenix_updater::pe::UpdateLock> {
-   Ok(phoenix_updater::pe::UpdateLock::acquire(dir).with_context(|| {
-      format!(
-         "locking {}",
-         dir.join(phoenix_updater::pe::INSTALL_LOCK_FILE).display()
-      )
-   })?)
+   Ok(
+      phoenix_updater::pe::UpdateLock::acquire(dir).with_context(|| {
+         format!(
+            "locking {}",
+            dir.join(phoenix_updater::pe::INSTALL_LOCK_FILE).display()
+         )
+      })?,
+   )
 }
 
 #[cfg_attr(
@@ -739,7 +797,10 @@ fn stream_copy(
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "streaming archive hasher runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "streaming archive hasher runs on Windows and in tests"
+   )
 )]
 fn stream_hash_and_copy(
    reader: &mut impl std::io::Read,
@@ -768,7 +829,10 @@ fn stream_hash_and_copy(
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "manifest path helper runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "manifest path helper runs on Windows and in tests"
+   )
 )]
 fn rel_path_posix(rel: &Path) -> misstep::Result<String> {
    let mut parts = Vec::new();
@@ -783,7 +847,10 @@ fn rel_path_posix(rel: &Path) -> misstep::Result<String> {
             })?;
             parts.push(text);
          },
-         _ => bail!("unsafe path {} inside bundled client archive", rel.display()),
+         _ => bail!(
+            "unsafe path {} inside bundled client archive",
+            rel.display()
+         ),
       }
    }
    Ok(parts.join("/"))
@@ -791,7 +858,10 @@ fn rel_path_posix(rel: &Path) -> misstep::Result<String> {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "manifest stamp helper runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "manifest stamp helper runs on Windows and in tests"
+   )
 )]
 fn compute_manifest_stamp(entries: &mut [(String, u64, String)]) -> misstep::Result<String> {
    entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -844,7 +914,10 @@ fn swap_client_dir_keep_backup(
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "installed version policy runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "installed version policy runs on Windows and in tests"
+   )
 )]
 #[derive(Debug, PartialEq, Eq)]
 enum InstalledAction {
@@ -855,7 +928,10 @@ enum InstalledAction {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "installed version policy runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "installed version policy runs on Windows and in tests"
+   )
 )]
 fn decide_installed_action(
    running_ver: &str,
@@ -884,18 +960,24 @@ fn decide_installed_action(
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "installed version error helper runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "installed version error helper runs on Windows and in tests"
+   )
 )]
 fn installed_version_unknown_error(existing_launcher: &Path) -> misstep::Report {
    misstep::Report::msg(format!(
-      "could not verify version of installed NyaaCord at {}; refusing to overwrite. Run --install-only to reinstall.",
+      "could not verify version of installed Nyaacord at {}; refusing to overwrite. Run --install-only to reinstall.",
       existing_launcher.display()
    ))
 }
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "installed launcher dispatch runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "installed launcher dispatch runs on Windows and in tests"
+   )
 )]
 fn run_installed_action<FHandOff, FUpdate>(
    running_ver: &str,
@@ -963,7 +1045,10 @@ fn plan_manual_update(
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "CLI update locked guard runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "CLI update locked guard runs on Windows and in tests"
+   )
 )]
 #[derive(Debug, PartialEq, Eq)]
 enum LockedUpdateAction {
@@ -974,7 +1059,10 @@ enum LockedUpdateAction {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "CLI update locked guard runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "CLI update locked guard runs on Windows and in tests"
+   )
 )]
 fn decide_locked_manual_update(
    target_exists: bool,
@@ -989,12 +1077,10 @@ fn decide_locked_manual_update(
    }
    match check_installed_for_release(live_ver, release_ver) {
       InstallUpdateDecision::Apply => LockedUpdateAction::Apply,
-      InstallUpdateDecision::AlreadyCurrent => LockedUpdateAction::UpToDate(
-         live_ver.map_or_else(
-            || phoenix_updater::version::normalize(release_ver),
-            phoenix_updater::version::normalize,
-         ),
-      ),
+      InstallUpdateDecision::AlreadyCurrent => LockedUpdateAction::UpToDate(live_ver.map_or_else(
+         || phoenix_updater::version::normalize(release_ver),
+         phoenix_updater::version::normalize,
+      )),
       InstallUpdateDecision::UnknownInstalled => LockedUpdateAction::UnknownTarget,
    }
 }
@@ -1014,7 +1100,10 @@ fn parse_client_stamp(raw: &str) -> Option<String> {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bounded stamp reader runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bounded stamp reader runs on Windows and in tests"
+   )
 )]
 fn read_bounded_stamp(reader: impl std::io::Read, label: &str) -> misstep::Result<String> {
    use std::io::Read as _;
@@ -1034,7 +1123,10 @@ fn read_bounded_stamp(reader: impl std::io::Read, label: &str) -> misstep::Resul
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bundled client stamp reader runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bundled client stamp reader runs on Windows and in tests"
+   )
 )]
 fn read_archive_stamp<R: std::io::Read + std::io::Seek>(
    archive: &mut zip::ZipArchive<R>,
@@ -1051,7 +1143,10 @@ fn read_archive_stamp<R: std::io::Read + std::io::Seek>(
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "installed stamp reader runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "installed stamp reader runs on Windows and in tests"
+   )
 )]
 fn read_installed_stamp(path: &Path) -> Option<String> {
    let file = std::fs::File::open(path).ok()?;
@@ -1060,7 +1155,10 @@ fn read_installed_stamp(path: &Path) -> Option<String> {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "PE overlay detection runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "PE overlay detection runs on Windows and in tests"
+   )
 )]
 fn pe_cert_directory(opt: &[u8]) -> (u64, u64) {
    if opt.len() < 152 {
@@ -1077,7 +1175,10 @@ fn pe_cert_directory(opt: &[u8]) -> (u64, u64) {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "PE overlay detection runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "PE overlay detection runs on Windows and in tests"
+   )
 )]
 fn pe_sections_end(
    file: &mut std::fs::File,
@@ -1108,7 +1209,10 @@ fn pe_sections_end(
 /// Checks whether a PE32+ executable has trailing non-certificate overlay bytes.
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "PE overlay detection runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "PE overlay detection runs on Windows and in tests"
+   )
 )]
 fn detect_pe_overlay(file: &mut std::fs::File) -> misstep::Result<bool> {
    use std::io::{Read as _, Seek as _, SeekFrom};
@@ -1126,9 +1230,7 @@ fn detect_pe_overlay(file: &mut std::fs::File) -> misstep::Result<bool> {
    file.seek(SeekFrom::Start(0)).context("seeking PE start")?;
 
    let mut dos = [0_u8; DOS_LEN];
-   file
-      .read_exact(&mut dos)
-      .context("reading PE DOS header")?;
+   file.read_exact(&mut dos).context("reading PE DOS header")?;
    ensure!(&dos[0..2] == b"MZ", "missing MZ header in launcher");
 
    let e_lfanew = u64::from(u32::from_le_bytes([dos[60], dos[61], dos[62], dos[63]]));
@@ -1209,7 +1311,10 @@ fn detect_pe_overlay(file: &mut std::fs::File) -> misstep::Result<bool> {
 /// the deterministic manifest SHA-256 matches `want_stamp`.
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "archive payload verifier runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "archive payload verifier runs on Windows and in tests"
+   )
 )]
 fn verify_archive_payload<R: std::io::Read + std::io::Seek>(
    archive: &mut zip::ZipArchive<R>,
@@ -1290,8 +1395,7 @@ fn extract_archive_to_staging<R: std::io::Read + std::io::Seek>(
       }
       let dest = staging.join(&rel);
       if entry.is_dir() {
-         std::fs::create_dir_all(&dest)
-            .with_context(|| format!("creating {}", dest.display()))?;
+         std::fs::create_dir_all(&dest).with_context(|| format!("creating {}", dest.display()))?;
          continue;
       }
       let rel_posix = rel_path_posix(&rel)?;
@@ -1299,8 +1403,8 @@ fn extract_archive_to_staging<R: std::io::Read + std::io::Seek>(
          std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
       }
-      let mut out = std::fs::File::create(&dest)
-         .with_context(|| format!("creating {}", dest.display()))?;
+      let mut out =
+         std::fs::File::create(&dest).with_context(|| format!("creating {}", dest.display()))?;
       let (size, digest) = stream_hash_and_copy(&mut entry, Some(&mut out))
          .with_context(|| format!("extracting {rel_posix}"))?;
       manifest.push((rel_posix, size, digest));
@@ -1324,7 +1428,10 @@ fn extract_archive_to_staging<R: std::io::Read + std::io::Seek>(
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "archive metadata check runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "archive metadata check runs on Windows and in tests"
+   )
 )]
 fn validate_archive_entries<R: std::io::Read + std::io::Seek>(
    archive: &mut zip::ZipArchive<R>,
@@ -1362,7 +1469,10 @@ fn validate_archive_entries<R: std::io::Read + std::io::Seek>(
 /// decompressing the client files.
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "bundled client validator runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "bundled client validator runs on Windows and in tests"
+   )
 )]
 fn validate_bundled_client_with(
    exe_path: &Path,
@@ -1392,10 +1502,7 @@ fn validate_bundled_client_with(
    allow(dead_code, reason = "entry point wrapper used on Windows")
 )]
 fn validate_bundled_client(exe_path: &Path) -> misstep::Result<Option<String>> {
-   validate_bundled_client_with(
-      exe_path,
-      option_env!("NYAACORD_EXPECT_CLIENT") == Some("1"),
-   )
+   validate_bundled_client_with(exe_path, option_env!("NYAACORD_EXPECT_CLIENT") == Some("1"))
 }
 
 #[cfg_attr(
@@ -1411,7 +1518,10 @@ struct ClientSyncOptions {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "tracked file replacement runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "tracked file replacement runs on Windows and in tests"
+   )
 )]
 struct ReplacedFile {
    dest: PathBuf,
@@ -1422,7 +1532,10 @@ struct ReplacedFile {
 /// `app` directory if dropped before `commit()`.
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "client sync transaction runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "client sync transaction runs on Windows and in tests"
+   )
 )]
 struct ClientTransaction {
    _lock: phoenix_updater::pe::UpdateLock,
@@ -1437,7 +1550,10 @@ struct ClientTransaction {
 
 #[cfg_attr(
    not(any(windows, test)),
-   allow(dead_code, reason = "client sync transaction runs on Windows and in tests")
+   allow(
+      dead_code,
+      reason = "client sync transaction runs on Windows and in tests"
+   )
 )]
 impl ClientTransaction {
    fn unchanged(
@@ -1537,7 +1653,13 @@ impl ClientTransaction {
             cleanup_old_files(dir, name);
          }
       }
-      for name in ["NyaaCord.exe", "phoenix.dll", "libplm.plugins.so", "version.txt"] {
+      for name in [
+         "Nyaacord.exe",
+         "NyaaCord.exe",
+         "phoenix.dll",
+         "libplm.plugins.so",
+         "version.txt",
+      ] {
          cleanup_old_files(&self.home, name);
       }
       if let Some(backup) = self.swapped_backup.take() {
@@ -1565,9 +1687,7 @@ impl Drop for ClientTransaction {
                   .and_then(OsStr::to_str)
                   .unwrap_or("file");
                let moved = unique_sibling(dir, name, "failed");
-               std::fs::rename(&replaced.dest, &moved)
-                  .ok()
-                  .map(|()| moved)
+               std::fs::rename(&replaced.dest, &moved).ok().map(|()| moved)
             } else {
                None
             };
@@ -1924,7 +2044,7 @@ mod windows {
          MessageBoxW(
             ptr::null_mut(),
             wide(text).as_ptr(),
-            wide("NyaaCord").as_ptr(),
+            wide("Nyaacord").as_ptr(),
             kind,
          )
       }
@@ -2068,17 +2188,22 @@ mod windows {
    }
 
    /// Syncs the embedded `phoenix.dll`, `libplm.plugins.so`, and `version.txt` inside `dir`.
-   fn sync_embedded_assets(tx: &mut ClientTransaction, dir: &Path) -> misstep::Result<PathBuf> {
+   fn sync_embedded_assets(
+      tx: &mut ClientTransaction,
+      dir: &Path,
+   ) -> misstep::Result<(PathBuf, bool)> {
       fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
       let dll = dir.join("phoenix.dll");
       let plugins = dir.join("libplm.plugins.so");
       let version_file = dir.join("version.txt");
+      let mut changed = false;
 
       if !EMBEDDED_DLL.is_empty() {
          let want_sha = sha256_slice(EMBEDDED_DLL);
          let have_match = dll.is_file() && sha256::sha256_file(&dll).is_ok_and(|s| s == want_sha);
          if !have_match {
             tx.write_file(&dll, EMBEDDED_DLL)?;
+            changed = true;
          }
       }
 
@@ -2088,12 +2213,14 @@ mod windows {
             plugins.is_file() && sha256::sha256_file(&plugins).is_ok_and(|s| s == want_sha);
          if !have_match {
             tx.write_file(&plugins, EMBEDDED_PLUGINS)?;
+            changed = true;
          }
       }
 
-      let want_version = format!("{VERSION}\n");
-      if fs::read_to_string(&version_file).ok().as_deref() != Some(want_version.as_str()) {
+      if super::version_needs_sync(dir, VERSION) {
+         let want_version = format!("{VERSION}\n");
          tx.write_file(&version_file, want_version.as_bytes())?;
+         changed = true;
       }
 
       if !dll.is_file() {
@@ -2102,7 +2229,7 @@ mod windows {
             dll.display()
          );
       }
-      Ok(dll)
+      Ok((dll, changed))
    }
 
    fn launcher_differs(me: &Path, launcher: &Path) -> bool {
@@ -2121,37 +2248,42 @@ mod windows {
       !same_contents
    }
 
-   /// Installs `NyaaCord.exe` and embedded assets inside `tx`; shortcuts refresh after commit.
+   /// Installs `Nyaacord.exe` and embedded assets inside `tx`; shortcuts refresh after commit.
    fn install_self(
       tx: &mut ClientTransaction,
       home: &Path,
       me: &Path,
    ) -> misstep::Result<(PathBuf, PathBuf, bool)> {
       fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
-      let launcher = home.join("NyaaCord.exe");
+      let launcher = home.join("Nyaacord.exe");
       let copied = !same_file(me, &launcher);
       if copied && launcher_differs(me, &launcher) {
          tx.copy_file(me, &launcher)
-            .context("installing NyaaCord.exe")?;
+            .context("installing Nyaacord.exe")?;
       }
 
-      let dll = sync_embedded_assets(tx, home)?;
-      Ok((launcher, dll, copied))
+      let (dll, assets_changed) = sync_embedded_assets(tx, home)?;
+      Ok((
+         launcher,
+         dll,
+         super::should_refresh_shortcuts(copied, assets_changed),
+      ))
    }
 
-   /// Manages `NyaaCord.lnk` (and removes legacy `Sunbird.lnk`) on Start Menu and Desktop.
+   /// Manages `Nyaacord.lnk` (and removes legacy `Sunbird.lnk` and `NyaaCord.lnk`) on Start Menu and Desktop.
    fn shortcuts(launcher: &Path, remove: bool) -> misstep::Result<()> {
       let script = format!(
          "$w = New-Object -ComObject WScript.Shell; \
           foreach ($dir in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'))) {{ \
              $legacy = Join-Path $dir 'Sunbird.lnk'; \
              if (Test-Path -LiteralPath $legacy) {{ Remove-Item -LiteralPath $legacy -ErrorAction SilentlyContinue }}; \
-             $p = Join-Path $dir 'NyaaCord.lnk'; \
-             if (${remove}) {{ Remove-Item -LiteralPath $p -ErrorAction SilentlyContinue; continue }}; \
+             $p = Join-Path $dir 'Nyaacord.lnk'; \
+             if (Test-Path -LiteralPath $p) {{ Remove-Item -LiteralPath $p -ErrorAction SilentlyContinue }}; \
+             if (${remove}) {{ continue }}; \
              $s = $w.CreateShortcut($p); \
              $s.TargetPath = $env:NC_TARGET; \
              $s.IconLocation = $env:NC_TARGET + ',0'; \
-             $s.Description = 'NyaaCord for Discord Phoenix'; \
+             $s.Description = 'Nyaacord for Discord Phoenix'; \
              $s.Save() \
           }}"
       );
@@ -2162,7 +2294,7 @@ mod windows {
          .status()
          .context("running powershell.exe")?;
       if !status.success() {
-         bail!("updating NyaaCord shortcuts failed");
+         bail!("updating Nyaacord shortcuts failed");
       }
       Ok(())
    }
@@ -2190,7 +2322,7 @@ mod windows {
 
    fn default_update_target() -> misstep::Result<PathBuf> {
       if let Ok(local) = local_app_data() {
-         let installed = install_home_in(&local).join("NyaaCord.exe");
+         let installed = install_home_in(&local).join("Nyaacord.exe");
          if installed.is_file() {
             return Ok(installed);
          }
@@ -2202,7 +2334,8 @@ mod windows {
       let Some(dir) = target.parent() else {
          return;
       };
-      let is_installed = local_app_data().is_ok_and(|local| install_home_in(&local) == dir);
+      let is_installed =
+         local_app_data().is_ok_and(|local| super::paths_equal(&install_home_in(&local), dir));
       let stamp = dir.join("version.txt");
       if is_installed || stamp.is_file() {
          let _ = fs::write(stamp, format!("{ver}\n"));
@@ -2294,21 +2427,28 @@ mod windows {
          .then(|| query_exe_version(target))
          .flatten();
 
-      match plan_manual_update(VERSION, target_exists, same_binary, target_ver.as_deref(), force) {
+      match plan_manual_update(
+         VERSION,
+         target_exists,
+         same_binary,
+         target_ver.as_deref(),
+         force,
+      ) {
          ManualUpdatePrecheck::UnknownTarget => bail!(
-            "could not verify version of installed NyaaCord at {}; pass --force to replace",
+            "could not verify version of installed Nyaacord at {}; pass --force to replace",
             target.display()
          ),
          ManualUpdatePrecheck::ForceFetch => Ok(Some(fetch_latest(cfg)?)),
-         ManualUpdatePrecheck::CheckVersion(effective_ver) => match check_latest(&effective_ver, cfg)?
-         {
-            CheckResult::UpToDate { current, latest } => {
-               ui.info(&format!(
-                  "Up to date (current: {current}, latest: {latest})"
-               ));
-               Ok(None)
-            },
-            CheckResult::Available(info) => Ok(Some(info)),
+         ManualUpdatePrecheck::CheckVersion(effective_ver) => {
+            match check_latest(&effective_ver, cfg)? {
+               CheckResult::UpToDate { current, latest } => {
+                  ui.info(&format!(
+                     "Up to date (current: {current}, latest: {latest})"
+                  ));
+                  Ok(None)
+               },
+               CheckResult::Available(info) => Ok(Some(info)),
+            }
          },
       }
    }
@@ -2347,7 +2487,7 @@ mod windows {
             return Ok(());
          },
          LockedUpdateAction::UnknownTarget => bail!(
-            "could not verify version of installed NyaaCord at {}; pass --force to replace",
+            "could not verify version of installed Nyaacord at {}; pass --force to replace",
             target.display()
          ),
          LockedUpdateAction::Apply => {},
@@ -2428,7 +2568,7 @@ mod windows {
    fn cmd_uninstall(ui: &Ui) -> misstep::Result<()> {
       let local = local_app_data()?;
       let home = install_home_in(&local);
-      let _ = shortcuts(&home.join("NyaaCord.exe"), true);
+      let _ = shortcuts(&home.join("Nyaacord.exe"), true);
       match fs::remove_dir_all(&home) {
          Err(err) if err.kind() != io::ErrorKind::NotFound => {
             ui.notice(&format!(
@@ -2436,7 +2576,7 @@ mod windows {
                home.display()
             ));
          },
-         _ => ui.notice("NyaaCord has been uninstalled. Your Discord data and settings were kept."),
+         _ => ui.notice("Nyaacord has been uninstalled. Your Discord data and settings were kept."),
       }
       Ok(())
    }
@@ -2466,7 +2606,7 @@ mod windows {
          cmd.arg("--").args(discord_args);
       }
       cmd.spawn()
-         .with_context(|| format!("launching installed NyaaCord at {}", launcher.display()))?;
+         .with_context(|| format!("launching installed Nyaacord at {}", launcher.display()))?;
       Ok(())
    }
 
@@ -2620,18 +2760,18 @@ mod windows {
       let with_nyaacord = all_target && open.iter().any(|&(_, pid, _)| has_module(pid, dll_name));
       let restart = if no_runtime {
          ui.ask(
-            "Discord is already running.\n\nRestart it without the NyaaCord plugin runtime? \
+            "Discord is already running.\n\nRestart it without the Nyaacord plugin runtime? \
              Any active call will end.",
          )
       } else if !all_target {
          ui.ask(
-            "Discord is already running from another installation.\n\nRestart it with NyaaCord? \
+            "Discord is already running from another installation.\n\nRestart it with Nyaacord? \
              Any active call will end.",
          )
       } else {
          !with_nyaacord
             && ui.ask(
-               "Discord is already running without NyaaCord.\n\nRestart it with NyaaCord? \
+               "Discord is already running without Nyaacord.\n\nRestart it with Nyaacord? \
                 Any active call will end.",
             )
       };
@@ -2800,7 +2940,7 @@ mod windows {
       quiet: bool,
    ) -> misstep::Result<Option<(PathBuf, PathBuf, Option<PathBuf>)>> {
       validate_bundled_client(me)?;
-      let existing_launcher = home.join("NyaaCord.exe");
+      let existing_launcher = home.join("Nyaacord.exe");
       let had_launcher = existing_launcher.is_file();
       if had_launcher
          && check_existing_launcher(
@@ -2834,9 +2974,9 @@ mod windows {
       let will_replace = launcher_differs(me, &existing_launcher);
       let mut tx =
          begin_bundled_client_sync_locked(lock, me, home, !explicit_target, will_replace)?;
-      let (launcher, dll, copied) = install_self(&mut tx, home, me)?;
+      let (launcher, dll, refresh_shortcuts) = install_self(&mut tx, home, me)?;
       let bundled_exe = tx.commit();
-      if copied {
+      if refresh_shortcuts {
          let _ = shortcuts(&launcher, false);
       }
 
@@ -2891,7 +3031,7 @@ mod windows {
       let exe = resolve_discord_exe_with(target_exe, env_discord, bundled_exe, &local);
       if !exe.is_file() {
          bail!(
-            "Discord Phoenix is not installed at {}. Download the full NyaaCord executable or pass --target-exe.",
+            "Discord Phoenix is not installed at {}. Download the full Nyaacord executable or pass --target-exe.",
             exe.display()
          );
       }
@@ -2910,7 +3050,7 @@ mod windows {
          app: &app,
          dll: &dll,
       };
-      // A second Discord instance hands off to the running one and exits, so NyaaCord
+      // A second Discord instance hands off to the running one and exits, so Nyaacord
       // would never load into the Discord window the user sees.
       if !handle_running_discord(
          &launch_target,
@@ -2945,7 +3085,7 @@ mod windows {
    pub fn run(mode: Mode, ui: &Ui) -> misstep::Result<()> {
       match mode {
          Mode::Version => {
-            let _ = writeln!(io::stdout(), "NyaaCord {VERSION}");
+            let _ = writeln!(io::stdout(), "Nyaacord {VERSION}");
             Ok(())
          },
          Mode::Help => {
@@ -2959,12 +3099,12 @@ mod windows {
             validate_bundled_client(&me)?;
             fs::create_dir_all(&home).with_context(|| format!("creating {}", home.display()))?;
             let lock = acquire_install_lock(&home)?;
-            let will_replace = launcher_differs(&me, &home.join("NyaaCord.exe"));
+            let will_replace = launcher_differs(&me, &home.join("Nyaacord.exe"));
             let mut tx = begin_bundled_client_sync_locked(lock, &me, &home, true, will_replace)?;
             let (launcher, dll, _) = install_self(&mut tx, &home, &me)?;
             let bundled = tx.commit();
             let _ = shortcuts(&launcher, false);
-            ui.info(&format!("Installed NyaaCord {VERSION}"));
+            ui.info(&format!("Installed Nyaacord {VERSION}"));
             ui.info(&format!("Launcher: {}", launcher.display()));
             ui.info(&format!("Loader: {}", dll.display()));
             if let Some(client_exe) = bundled {
@@ -3043,14 +3183,14 @@ mod tests {
          parse_args(os_args(&[
             "--update",
             "--target",
-            r"C:\Apps\NyaaCord.exe",
+            r"C:\Apps\Nyaacord.exe",
             "--force",
             "--quiet"
          ]))
          .expect("update"),
          CliOptions {
             mode: Mode::Update {
-               target: Some(PathBuf::from(r"C:\Apps\NyaaCord.exe")),
+               target: Some(PathBuf::from(r"C:\Apps\Nyaacord.exe")),
                repo: None,
                api: None,
                timeout: None,
@@ -3060,10 +3200,10 @@ mod tests {
          }
       );
       assert_eq!(
-         parse_args(os_args(&["--rollback", "--target=NyaaCord.exe"])).expect("rollback"),
+         parse_args(os_args(&["--rollback", "--target=Nyaacord.exe"])).expect("rollback"),
          CliOptions {
             mode: Mode::Rollback {
-               target: Some(PathBuf::from("NyaaCord.exe")),
+               target: Some(PathBuf::from("Nyaacord.exe")),
             },
             quiet: false,
          }
@@ -3236,7 +3376,10 @@ mod tests {
       // Valid thin PE32+ returns Ok(None) when not expecting a bundle, Err when expecting one.
       let thin_exe = root.join("thin.exe");
       std::fs::write(&thin_exe, build_fake_pe64(None, &[])).expect("write thin exe");
-      assert_eq!(sync_commit(&thin_exe, &home, false, false).expect("thin"), None);
+      assert_eq!(
+         sync_commit(&thin_exe, &home, false, false).expect("thin"),
+         None
+      );
       assert!(sync_commit(&thin_exe, &home, true, false).is_err());
 
       // Valid PE32+ with Authenticode certificate table only is treated as thin.
@@ -3558,7 +3701,7 @@ mod tests {
       let (bytes_v2, _) = build_pe_with_zip(&[(CLIENT_EXE_NAME, b"discord-v2")]);
       std::fs::write(&exe_v2, &bytes_v2).expect("write v2 exe");
 
-      let launcher = home.join("NyaaCord.exe");
+      let launcher = home.join("Nyaacord.exe");
       let dll = home.join("phoenix.dll");
       let plugins = home.join("libplm.plugins.so");
       let version_file = home.join("version.txt");
@@ -3568,9 +3711,14 @@ mod tests {
       // Fresh install failure removes newly created launcher, plugins, and app dir.
       {
          let mut tx = begin_full_sync(&exe_v1, &home).expect("begin fresh v1");
-         tx.copy_file(&exe_v1, &launcher).expect("copy fresh launcher");
-         tx.write_file(&plugins, b"plugins-v1").expect("write fresh plugins");
-         assert!(tx.replace_file_with(&dll, |_| bail!("simulated fresh DLL failure")).is_err());
+         tx.copy_file(&exe_v1, &launcher)
+            .expect("copy fresh launcher");
+         tx.write_file(&plugins, b"plugins-v1")
+            .expect("write fresh plugins");
+         assert!(
+            tx.replace_file_with(&dll, |_| bail!("simulated fresh DLL failure"))
+               .is_err()
+         );
       }
       assert!(!launcher.exists() && !plugins.exists() && !dll.exists());
       assert!(!home.join(CLIENT_DIR_NAME).exists());
@@ -3578,10 +3726,14 @@ mod tests {
       // Commit complete v1 installation and snapshot all v1 digests.
       {
          let mut tx = begin_full_sync(&exe_v1, &home).expect("begin v1");
-         tx.copy_file(&exe_v1, &launcher).expect("install v1 launcher");
-         tx.write_file(&dll, b"phoenix-dll-v1").expect("install v1 dll");
-         tx.write_file(&plugins, b"plugins-v1").expect("install v1 plugins");
-         tx.write_file(&version_file, b"0.2.1\n").expect("install v1 version");
+         tx.copy_file(&exe_v1, &launcher)
+            .expect("install v1 launcher");
+         tx.write_file(&dll, b"phoenix-dll-v1")
+            .expect("install v1 dll");
+         tx.write_file(&plugins, b"plugins-v1")
+            .expect("install v1 plugins");
+         tx.write_file(&version_file, b"0.2.1\n")
+            .expect("install v1 version");
          tx.commit();
       }
       let tracked = [&launcher, &dll, &plugins, &version_file, &discord];
@@ -3594,11 +3746,22 @@ mod tests {
       {
          let mut tx = begin_full_sync(&exe_v2, &home).expect("begin v2");
          tx.copy_file(&exe_v2, &launcher).expect("stage v2 launcher");
-         tx.write_file(&plugins, b"plugins-v2").expect("stage v2 plugins");
-         tx.write_file(&version_file, b"0.2.2\n").expect("stage v2 version");
-         assert_eq!(std::fs::read(&plugins).expect("temp v2 plugins"), b"plugins-v2");
-         assert_eq!(std::fs::read(&discord).expect("temp v2 discord"), b"discord-v2");
-         assert!(tx.replace_file_with(&dll, |_| bail!("simulated locked DLL")).is_err());
+         tx.write_file(&plugins, b"plugins-v2")
+            .expect("stage v2 plugins");
+         tx.write_file(&version_file, b"0.2.2\n")
+            .expect("stage v2 version");
+         assert_eq!(
+            std::fs::read(&plugins).expect("temp v2 plugins"),
+            b"plugins-v2"
+         );
+         assert_eq!(
+            std::fs::read(&discord).expect("temp v2 discord"),
+            b"discord-v2"
+         );
+         assert!(
+            tx.replace_file_with(&dll, |_| bail!("simulated locked DLL"))
+               .is_err()
+         );
       }
 
       // Every v1 file and the bundled client must be restored identically with no leftovers.
@@ -3606,7 +3769,10 @@ mod tests {
          let actual = phoenix_updater::sha256::sha256_file(path).expect("restored sha");
          assert_eq!(&actual, expected, "mismatch for {}", path.display());
       }
-      assert_eq!(std::fs::read_to_string(&stamp_file).expect("stamp").trim(), stamp_v1);
+      assert_eq!(
+         std::fs::read_to_string(&stamp_file).expect("stamp").trim(),
+         stamp_v1
+      );
       assert_no_tx_leftovers(&home);
 
       let _ = std::fs::remove_dir_all(&root);
@@ -3775,7 +3941,7 @@ mod tests {
             std::process::Command::new(&missing_exe)
                .spawn()
                .with_context(|| {
-                  format!("launching installed NyaaCord at {}", missing_exe.display())
+                  format!("launching installed Nyaacord at {}", missing_exe.display())
                })?;
             Ok(())
          },
@@ -3787,7 +3953,7 @@ mod tests {
       .expect_err("spawn failure during HandOffToInstalled must propagate Err");
       assert!(!ran_update);
       assert!(
-         err.to_string().contains("launching installed NyaaCord"),
+         err.to_string().contains("launching installed Nyaacord"),
          "unexpected error: {err}"
       );
 
@@ -3947,10 +4113,7 @@ mod tests {
       );
 
       // Explicit target overrides restrict matching to that exact executable only.
-      assert_eq!(
-         discord_match_paths(&bundled, &local, true),
-         vec![bundled]
-      );
+      assert_eq!(discord_match_paths(&bundled, &local, true), vec![bundled]);
       assert_eq!(discord_match_paths(&legacy, &local, true), vec![legacy]);
       assert_eq!(discord_match_paths(&custom, &local, true), vec![custom]);
    }
@@ -4000,11 +4163,29 @@ mod tests {
       let _ = std::fs::remove_file(&installed);
       assert_eq!(
          resolve_discord_exe_with(None, None, None, &local),
-         local
-            .join("DiscordPhoenix")
-            .join("app")
-            .join("Discord.exe")
+         local.join("DiscordPhoenix").join("app").join("Discord.exe")
       );
+
+      let _ = std::fs::remove_dir_all(&root);
+   }
+
+   #[test]
+   fn refreshes_shortcuts_on_copy_or_version_change() {
+      let root = unique_sibling(&std::env::temp_dir(), "nyaacord-version-sync", "dir");
+      std::fs::create_dir_all(&root).expect("create root");
+
+      assert!(version_needs_sync(&root, "0.2.2"));
+      std::fs::write(root.join("version.txt"), "0.2.1\n").expect("write old version");
+      assert!(version_needs_sync(&root, "0.2.2"));
+      assert!(should_refresh_shortcuts(
+         false,
+         version_needs_sync(&root, "0.2.2")
+      ));
+
+      std::fs::write(root.join("version.txt"), "0.2.2\n").expect("write current version");
+      assert!(!version_needs_sync(&root, "0.2.2"));
+      assert!(!should_refresh_shortcuts(false, false));
+      assert!(should_refresh_shortcuts(true, false));
 
       let _ = std::fs::remove_dir_all(&root);
    }

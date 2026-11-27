@@ -1,5 +1,5 @@
 //! `nyaacord-updater` CLI for checking, downloading, verifying, rolling back,
-//! and relaunching `NyaaCord` `AppImage` releases.
+//! and relaunching `Nyaacord` `AppImage` releases.
 
 use std::{
    env,

@@ -10,8 +10,8 @@ pub const DEFAULT_REPO: &str = "CateDesu/NyaaCord";
 pub const DEFAULT_CONNECT_TIMEOUT_MS: i64 = 15_000;
 pub const DEFAULT_STALL_TIMEOUT_SECS: i64 = 30;
 const MAX_API_BYTES: u64 = 4 * 1024 * 1024;
-const PREFERRED_APPIMAGE_ASSET: &str = "NyaaCord-x86_64.AppImage";
-const PREFERRED_WINDOWS_ASSET: &str = "NyaaCord-x86_64.exe";
+const PREFERRED_APPIMAGE_ASSET: &str = "Nyaacord-x86_64.AppImage";
+const PREFERRED_WINDOWS_ASSET: &str = "Nyaacord-x86_64.exe";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(
@@ -231,7 +231,7 @@ fn select_appimage_asset(release: &GitHubRelease) -> Result<&GitHubAsset, Error>
    if let Some(exact) = release
       .assets
       .iter()
-      .find(|a| a.name == PREFERRED_APPIMAGE_ASSET)
+      .find(|a| a.name.eq_ignore_ascii_case(PREFERRED_APPIMAGE_ASSET))
    {
       return Ok(exact);
    }
@@ -479,9 +479,9 @@ mod tests {
       let hash = "a".repeat(64);
       let upper = "B".repeat(64);
       let text =
-         format!("# comment\n{hash}  NyaaCord-x86_64.AppImage\n{upper} *./other.AppImage\n");
+         format!("# comment\n{hash}  Nyaacord-x86_64.AppImage\n{upper} *./other.AppImage\n");
       assert_eq!(
-         parse_sha256sums(&text, "NyaaCord-x86_64.AppImage"),
+         parse_sha256sums(&text, "Nyaacord-x86_64.AppImage"),
          Some(hash)
       );
       assert_eq!(
@@ -501,13 +501,24 @@ mod tests {
       };
 
       let release = GitHubRelease {
-         tag_name: "v0.2.0".to_owned(),
+         tag_name: "v0.2.2".to_owned(),
          draft: false,
-         html_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0".to_owned(),
-         assets: vec![mk("Other-amd64.AppImage"), mk("NyaaCord-x86_64.AppImage")],
+         html_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.2".to_owned(),
+         assets: vec![mk("Other-amd64.AppImage"), mk("Nyaacord-x86_64.AppImage")],
       };
       assert_eq!(
          select_appimage_asset(&release).expect("selected").name,
+         "Nyaacord-x86_64.AppImage"
+      );
+
+      let legacy_case = GitHubRelease {
+         tag_name: "v0.2.1".to_owned(),
+         draft: false,
+         html_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.1".to_owned(),
+         assets: vec![mk("Other-amd64.AppImage"), mk("NyaaCord-x86_64.AppImage")],
+      };
+      assert_eq!(
+         select_appimage_asset(&legacy_case).expect("selected").name,
          "NyaaCord-x86_64.AppImage"
       );
 
@@ -516,24 +527,24 @@ mod tests {
          draft: false,
          html_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0".to_owned(),
          assets: vec![
-            mk("NyaaCord-aarch64.AppImage"),
-            mk("NyaaCord-amd64.AppImage"),
+            mk("Nyaacord-aarch64.AppImage"),
+            mk("Nyaacord-amd64.AppImage"),
          ],
       };
       assert_eq!(
          select_appimage_asset(&fallback).expect("selected").name,
-         "NyaaCord-amd64.AppImage"
+         "Nyaacord-amd64.AppImage"
       );
 
       let single = GitHubRelease {
          tag_name: "v0.2.0".to_owned(),
          draft: false,
          html_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0".to_owned(),
-         assets: vec![mk("NyaaCord.AppImage"), mk("SHA256SUMS.txt")],
+         assets: vec![mk("Nyaacord.AppImage"), mk("SHA256SUMS.txt")],
       };
       assert_eq!(
          select_appimage_asset(&single).expect("selected").name,
-         "NyaaCord.AppImage"
+         "Nyaacord.AppImage"
       );
 
       let ambiguous = GitHubRelease {
@@ -549,7 +560,7 @@ mod tests {
    fn https_api_rejects_loopback_http_release_urls() {
       assert!(
          validate_release_url(
-            "https://github.com/CateDesu/NyaaCord/releases/download/v0.2.0/NyaaCord.AppImage",
+            "https://github.com/CateDesu/NyaaCord/releases/download/v0.2.0/Nyaacord.AppImage",
             http::UrlScheme::Https
          )
          .is_ok()
@@ -580,12 +591,12 @@ mod tests {
       };
 
       let release = GitHubRelease {
-         tag_name: "v0.2.0".to_owned(),
+         tag_name: "v0.2.2".to_owned(),
          draft: false,
-         html_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0".to_owned(),
+         html_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.2".to_owned(),
          assets: vec![
-            mk("NyaaCord-x86_64.AppImage"),
-            mk("NyaaCord-x86_64.exe"),
+            mk("Nyaacord-x86_64.AppImage"),
+            mk("Nyaacord-x86_64.exe"),
             mk("SHA256SUMS.txt"),
          ],
       };
@@ -593,27 +604,27 @@ mod tests {
          select_asset_for(&release, TargetPlatform::WindowsExe)
             .expect("selected")
             .name,
-         "NyaaCord-x86_64.exe"
+         "Nyaacord-x86_64.exe"
       );
 
       let fallback = GitHubRelease {
          tag_name: "v0.2.0".to_owned(),
          draft: false,
          html_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0".to_owned(),
-         assets: vec![mk("NyaaCord-arm64.exe"), mk("NyaaCord-win-x64.exe")],
+         assets: vec![mk("Nyaacord-arm64.exe"), mk("Nyaacord-win-x64.exe")],
       };
       assert_eq!(
          select_asset_for(&fallback, TargetPlatform::WindowsExe)
             .expect("selected")
             .name,
-         "NyaaCord-win-x64.exe"
+         "Nyaacord-win-x64.exe"
       );
 
       let missing = GitHubRelease {
          tag_name: "v0.2.0".to_owned(),
          draft: false,
          html_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0".to_owned(),
-         assets: vec![mk("NyaaCord-x86_64.AppImage")],
+         assets: vec![mk("Nyaacord-x86_64.AppImage")],
       };
       assert!(matches!(
          select_asset_for(&missing, TargetPlatform::WindowsExe),
@@ -649,13 +660,13 @@ mod tests {
 
       let hash = "c".repeat(64);
       assert_eq!(
-         parse_single_sha256_file(&format!("{hash}\n"), "NyaaCord-x86_64.exe"),
+         parse_single_sha256_file(&format!("{hash}\n"), "Nyaacord-x86_64.exe"),
          Some(hash.clone())
       );
       assert_eq!(
          parse_single_sha256_file(
-            &format!("{hash}  NyaaCord-x86_64.exe\n"),
-            "NyaaCord-x86_64.exe"
+            &format!("{hash}  Nyaacord-x86_64.exe\n"),
+            "Nyaacord-x86_64.exe"
          ),
          Some(hash)
       );

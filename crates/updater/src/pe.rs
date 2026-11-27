@@ -87,6 +87,19 @@ pub fn check_installed_for_release(
    InstallUpdateDecision::Apply
 }
 
+#[cfg_attr(
+   not(any(windows, test)),
+   allow(dead_code, reason = "used by Windows query_exe_version and host tests")
+)]
+fn parse_version_output(text: &str) -> Option<String> {
+   let line = text.lines().next()?.trim();
+   let ver = line
+      .strip_prefix("Nyaacord ")
+      .or_else(|| line.strip_prefix("NyaaCord "))?
+      .trim();
+   (!ver.is_empty()).then(|| version::normalize(ver))
+}
+
 /// Queries `exe --version` without triggering auto-update or flashing a console window.
 #[cfg(windows)]
 #[must_use]
@@ -111,9 +124,7 @@ pub fn query_exe_version(exe: &Path) -> Option<String> {
       return None;
    }
    let text = String::from_utf8(out.stdout).ok()?;
-   let line = text.lines().next()?.trim();
-   let ver = line.strip_prefix("NyaaCord ")?.trim();
-   (!ver.is_empty()).then(|| version::normalize(ver))
+   parse_version_output(&text)
 }
 
 struct TempFileGuard {
@@ -771,8 +782,8 @@ mod tests {
       ));
       fs::create_dir_all(&dir).expect("create temp dir");
 
-      let target = dir.join("NyaaCord.exe");
-      let staged = dir.join(".NyaaCord.exe.new");
+      let target = dir.join("Nyaacord.exe");
+      let staged = dir.join(".Nyaacord.exe.new");
       let v1 = build_fake_pe64(b"exe-v1");
       let v2 = build_fake_pe64(b"exe-v2-updated");
       fs::write(&target, &v1).expect("write v1");
@@ -836,8 +847,8 @@ mod tests {
       ));
       fs::create_dir_all(&dir).expect("create temp dir");
 
-      let target = dir.join("NyaaCord.exe");
-      let staged = dir.join(".NyaaCord.exe.new");
+      let target = dir.join("Nyaacord.exe");
+      let staged = dir.join(".Nyaacord.exe.new");
       let v1 = build_fake_pe64(b"exe-v1");
       let v2 = build_fake_pe64(b"exe-v2");
       fs::write(&target, &v1).expect("write v1");
@@ -859,5 +870,18 @@ mod tests {
       // Lock releases cleanly on drop and can be re-acquired.
       let _relock = UpdateLock::acquire(&dir).expect("re-acquire lock");
       let _ = fs::remove_dir_all(&dir);
+   }
+
+   #[test]
+   fn parses_current_and_legacy_version_prefixes() {
+      assert_eq!(
+         parse_version_output("Nyaacord 0.2.2\r\n"),
+         Some("0.2.2".to_owned())
+      );
+      assert_eq!(
+         parse_version_output("NyaaCord 0.2.1\n"),
+         Some("0.2.1".to_owned())
+      );
+      assert_eq!(parse_version_output("Other 0.2.2\n"), None);
    }
 }

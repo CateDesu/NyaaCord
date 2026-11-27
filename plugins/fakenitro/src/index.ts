@@ -1,5 +1,5 @@
 // @description Sends custom and animated emojis as links, and renders fake emojis, stickers, and GIFs as real ones
-// @version 0.4.0
+// @version 0.4.2
 // @author mantikafasi
 
 const { gateway } = phoenix;
@@ -108,33 +108,71 @@ const addStickers = (list: Phoenix.Sticker[] | undefined) => {
 
 // Phoenix loads guilds lazily and never hands READY to plugins: guilds and their
 // emojis/stickers live in its cache. Ids in keys are zero-padded to 20 digits.
+const SETTLE_MS = 5 * 60 * 1000;
+const REFRESH_GAP_MS = 3000;
+let settleUntil = Date.now() + SETTLE_MS;
+let lastLoad = 0;
+let loading = false;
+let lastGuilds = 0;
+
 const unpad = (id: string) => id.replace(/^0+/, "");
 const load = async () => {
-  const guilds = await phoenix.stores.sql<{ g: string; e: string | null; s: string | null }>(
-    "SELECT k AS g, json_extract(CAST(v AS TEXT), '$.emojis') AS e," +
-      " json_extract(CAST(v AS TEXT), '$.stickers') AS s FROM guilds",
-  );
-  for (const { g, e, s } of guilds) {
-    if (e) addEmojis(unpad(g), JSON.parse(e));
-    if (s) addStickers(JSON.parse(s));
+  loading = true;
+  lastLoad = Date.now();
+  try {
+    const prevEmojis = emojis.size;
+    const prevStickers = stickers.size;
+    const prevChannels = channelGuild.size;
+    const prevGuilds = lastGuilds;
+    const guilds = await phoenix.stores.sql<{ g: string; e: string | null; s: string | null }>(
+      "SELECT k AS g, json_extract(CAST(v AS TEXT), '$.emojis') AS e," +
+        " json_extract(CAST(v AS TEXT), '$.stickers') AS s FROM guilds",
+    );
+    if (guilds.length > lastGuilds) {
+      lastGuilds = guilds.length;
+      settleUntil = Math.max(settleUntil, Date.now() + SETTLE_MS);
+    }
+    for (const { g, e, s } of guilds) {
+      if (e) addEmojis(unpad(g), JSON.parse(e));
+      if (s) addStickers(JSON.parse(s));
+    }
+    // `guild:channel` keys: Android keeps them in `channel_stubs`, Desktop in
+    // `channels`. One row per guild keeps this under the 10000-row limit.
+    for (const table of ["channel_stubs", "channels"]) {
+      const channels = await phoenix.stores
+        .sql<{ g: string; c: string }>(
+          `SELECT substr(k, 1, 20) AS g, group_concat(substr(k, 22)) AS c FROM ${table}` +
+            " WHERE k NOT LIKE '00000000000000000000:%' GROUP BY 1",
+        )
+        .catch(() => []);
+      for (const { g, c } of channels) for (const id of c.split(",")) channelGuild.set(unpad(id), unpad(g));
+    }
+    if (
+      prevGuilds === 0 ||
+      guilds.length !== prevGuilds ||
+      emojis.size !== prevEmojis ||
+      stickers.size !== prevStickers ||
+      channelGuild.size !== prevChannels
+    ) {
+      phoenix.log.info(
+        `${emojis.size} emojis, ${stickers.size} stickers in ${guilds.length} servers, ${channelGuild.size} channels`,
+      );
+    }
+  } finally {
+    loading = false;
   }
-  // `guild:channel` keys: Android keeps them in `channel_stubs`, Desktop in
-  // `channels`. One row per guild keeps this under the 10000-row limit.
-  for (const table of ["channel_stubs", "channels"]) {
-    const channels = await phoenix.stores
-      .sql<{ g: string; c: string }>(
-        `SELECT substr(k, 1, 20) AS g, group_concat(substr(k, 22)) AS c FROM ${table}` +
-          " WHERE k NOT LIKE '00000000000000000000:%' GROUP BY 1",
-      )
-      .catch(() => []);
-    for (const { g, c } of channels) for (const id of c.split(",")) channelGuild.set(unpad(id), unpad(g));
-  }
-  phoenix.log.info(
-    `${emojis.size} emojis, ${stickers.size} stickers in ${guilds.length} servers, ${channelGuild.size} channels`,
-  );
 };
 const reload = () => load().catch((err) => phoenix.log.warn(`reading the cache: ${err}`));
-reload();
+const refreshCache = (force = false) => {
+  if (loading) return;
+  const now = Date.now();
+  if (!force) {
+    if (now >= settleUntil && lastGuilds > 0) return;
+    if (now - lastLoad < REFRESH_GAP_MS) return;
+  }
+  reload();
+};
+refreshCache(true);
 
 if (gateway.guildCreate) {
   phoenix.on(gateway.guildCreate, (guild) => {
@@ -162,7 +200,9 @@ const readTier = () =>
       // Desktop switches accounts without reloading plugins.
       if (currentUserId !== null && currentUserId !== user.id) {
         for (const map of [emojis, byName, stickers, channelGuild, picked] as Map<string, unknown>[]) map.clear();
-        reload();
+        lastGuilds = 0;
+        settleUntil = Date.now() + SETTLE_MS;
+        refreshCache(true);
       }
       currentUserId = user.id;
     })
@@ -172,8 +212,9 @@ readTier();
 // ponytail: a tier bought or lost mid-session shows on the next sync.
 if (gateway.readySupplemental) {
   phoenix.on(gateway.readySupplemental, () => {
+    settleUntil = Date.now() + SETTLE_MS;
     readTier();
-    reload();
+    refreshCache(true);
   });
 }
 
@@ -192,12 +233,10 @@ const link = (emoji: Emoji) => {
   return `[${settings.hyperLinkText.replaceAll("{{NAME}}", emoji.name)}](${url})`;
 };
 
-const token = (emoji: Emoji) => `<${emoji.animated ? "a" : ""}:${emoji.name}:${emoji.id}>`;
-
 // Rewrites `<a:name:id>` tokens the sender can't use into links, and `:name:`
-// shortcodes into the emoji or its link: Desktop posts what the message box
-// holds, and Discord leaves a shortcode as text. Links need whitespace around
-// them to embed, one space between adjacent ones.
+// shortcodes into links when no usable emoji matches so Phoenix expands usable
+// shortcodes itself. Links need whitespace around them to embed, one space
+// between adjacent ones.
 // ponytail: a `:name:` shared by several servers picks the first one we saw
 // when none of them is usable here.
 const rewrite = (text: string, guild: string | undefined) => {
@@ -209,8 +248,7 @@ const rewrite = (text: string, guild: string | undefined) => {
       if (!emoji || usable(emoji, guild)) return match;
     } else {
       const found = picked.has(name) ? [picked.get(name)!] : (byName.get(name) ?? []);
-      const own = found.find((e) => usable(e, guild));
-      if (own) return token(own);
+      if (found.some((e) => usable(e, guild))) return match;
       emoji = found.find((e) => e.available);
       if (!emoji) return match;
     }
@@ -238,6 +276,7 @@ phoenix.messages.onEmojiPick((id, ctx) => {
 // send after an account switch still uses the last one's.
 phoenix.messages.onSend((text, ctx) => {
   readTier();
+  refreshCache();
   if (!text.includes(":")) return;
   const result = rewrite(text, guildOf(ctx));
   return result === text ? undefined : result;
@@ -432,6 +471,7 @@ const transformMessage = (message: TransformableMessage | null | undefined): boo
 for (const event of [gateway.messageCreate, gateway.messageUpdate]) {
   phoenix.hook(event, {
     before(message) {
+      refreshCache();
       transformMessage(message);
     },
   });

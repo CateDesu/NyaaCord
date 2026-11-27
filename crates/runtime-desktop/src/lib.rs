@@ -1,10 +1,11 @@
 //! phoenix on Desktop Phoenix: the access gate, the HTTP transport hooks, the
-//! `NyaaCord` pages in User Settings, message accessories and the tray.
+//! `Nyaacord` pages in User Settings, message accessories and the tray.
 
 #![cfg(any(windows, all(target_os = "linux", target_arch = "x86_64")))]
 
 mod accessories;
 mod badges;
+mod composer;
 mod context_menu;
 mod discord;
 mod emoji;
@@ -16,63 +17,38 @@ mod modal;
 mod os;
 mod settings;
 mod staff;
+mod tray;
+mod typing;
 
 use std::{
    ffi::c_void,
-   path::{
-      Path,
-      PathBuf,
-   },
-   sync::{
-      Arc,
-      Mutex,
-      PoisonError,
-   },
+   path::{Path, PathBuf},
+   sync::{Arc, Mutex, PoisonError},
    time::Duration,
 };
 
 use phoenix_hook::image::Image;
 use phoenix_runtime::{
-   Error,
-   Notice,
-   Platform,
-   Plugin,
-   Started,
-   discord::{
-      Authorization,
-      DiscordError,
-   },
-   fetch::{
-      FetchError,
-      Request,
-      Response,
-   },
-   remote::{
-      self,
-      Done,
-   },
-   store::{
-      Rows,
-      StoreError,
-   },
+   Error, Notice, Platform, Plugin, Started,
+   discord::{Authorization, DiscordError},
+   fetch::{FetchError, Request, Response},
+   remote::{self, Done},
+   store::{Rows, StoreError},
 };
 use phoenix_sigs::registry::GatewayRegistry;
-use rquickjs::{
-   Ctx,
-   Object,
-};
+use rquickjs::{Ctx, Object};
 
 struct Desktop;
 
 /// A `POST /ui/choose` or `POST /ui/sheet` body.
 #[derive(serde::Deserialize)]
 struct DialogRequest {
-   title:     Option<String>,
-   message:   Option<String>,
-   text:      Option<String>,
+   title: Option<String>,
+   message: Option<String>,
+   text: Option<String>,
    monospace: Option<bool>,
    highlight: Option<bool>,
-   options:   Option<Vec<DialogItem>>,
+   options: Option<Vec<DialogItem>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -80,7 +56,7 @@ struct DialogRequest {
 enum DialogItem {
    Label(String),
    Item {
-      label:  String,
+      label: String,
       #[serde(default)]
       danger: bool,
    },
@@ -108,17 +84,20 @@ pub fn prepare() -> Result<(), Error> {
    staff::prepare(&image);
    settings::install(&image);
    modal::install(&image);
+   composer::install(&image);
    accessories::install(&image);
    context_menu::install(&image);
    message::install(&image);
    badges::install(&image);
    emoji::install(&image);
+   typing::install(&image);
    <os::Os as os::DesktopOs>::install(&image);
    let registry = phoenix_runtime::hook(&image);
    if registry.is_ok() {
       discord::install(&image);
       accessories::install_optimistic_delete(&image);
    }
+   tray::install(&image);
    // The index is tens of MB and nothing reads it after startup.
    phoenix_sigs::desktop::release_call_index();
    *PREPARED.lock().unwrap_or_else(PoisonError::into_inner) = Some((image, registry?));
@@ -126,7 +105,7 @@ pub fn prepare() -> Result<(), Error> {
 }
 
 /// Opens the access gate and hooks nothing else, so Discord runs as it would
-/// without `NyaaCord`. For telling Discord's own behaviour from ours.
+/// without `Nyaacord`. For telling Discord's own behaviour from ours.
 pub fn open_gate_only() -> Result<(), Error> {
    phoenix_runtime::set_platform(&Desktop);
    open_access_gate(&phoenix_runtime::target()?);
@@ -152,25 +131,38 @@ pub fn start(home: PathBuf, bundled: Vec<Plugin>) -> Result<Started, Error> {
 /// `libdiscord_ops_surfaces::client_access::ClientAccessGate`, and blocks the
 /// login on it. One function reads it (1 blocked, 2 no gate, also what a
 /// missing value reads as), and the gate is only considered while it is not 2:
-/// its small caller is `signed_in && access(..) != 2`. This makes it return 2.
-/// Discord settles on the gate within its first frames, so the loader calls
-/// this from `DllMain` or the constructor, before Discord's own code.
+/// its small caller is `signed_in && access(..) != 2`. A separate evaluator
+/// gates background services like DM notifications and sounds on the
+/// `2026-11-phoenix-app-access` flag. Patching both lets the UI and background
+/// services run normally.
 fn open_access_gate(image: &Image<'static>) {
    /// `mov al, 2; ret`
-   const ALLOWED: [u8; 3] = [0xB0, 0x02, 0xC3];
+   const GATE_ALLOWED: [u8; 3] = [0xB0, 0x02, 0xC3];
+   /// `mov al, 1; ret`
+   const EVALUATOR_ALLOWED: [u8; 3] = [0xB0, 0x01, 0xC3];
 
-   let access = match phoenix_sigs::desktop::access_gate(image) {
-      Ok(access) => access,
-      Err(err) => {
-         log::warn!("access gate: {err}, leaving it");
-         return;
+   match phoenix_sigs::desktop::access_gate(image) {
+      Ok(access) => {
+         // SAFETY: Discord's own code, written from `DllMain` or the
+         // constructor before it runs.
+         match unsafe { image.write_code(access, &GATE_ALLOWED) } {
+            Ok(()) => log::info!("access gate: open"),
+            Err(err) => log::error!("access gate: {err}"),
+         }
       },
-   };
-   // SAFETY: Discord's own code, written from `DllMain` or the constructor
-   // before it runs.
-   match unsafe { image.write_code(access, &ALLOWED) } {
-      Ok(()) => log::info!("access gate: open"),
-      Err(err) => log::error!("access gate: {err}"),
+      Err(err) => log::warn!("access gate: {err}, leaving it"),
+   }
+
+   match phoenix_sigs::desktop::access_evaluator(image) {
+      Ok(eval) => {
+         // SAFETY: Discord's own code, written from `DllMain` or the
+         // constructor before it runs.
+         match unsafe { image.write_code(eval, &EVALUATOR_ALLOWED) } {
+            Ok(()) => log::info!("access evaluator: open"),
+            Err(err) => log::error!("access evaluator: {err}"),
+         }
+      },
+      Err(err) => log::warn!("access evaluator: {err}, leaving it"),
    }
 }
 
@@ -242,13 +234,13 @@ impl Platform for Desktop {
       remote::require_token(&state.plugins_dir().with_file_name("debug-shell-token"));
       remote::ensure_started();
       phoenix_ui_desktop::start_tray(phoenix_ui_desktop::TrayConfig {
-         dashboard_url:    remote::dashboard_url(),
-         plugins_dir:      state.plugins_dir(),
-         on_reload_all:    Some(Arc::new(phoenix_runtime::reload_all)),
+         dashboard_url: remote::dashboard_url(),
+         plugins_dir: state.plugins_dir(),
+         on_reload_all: Some(Arc::new(phoenix_runtime::reload_all)),
          on_check_updates: Some(Arc::new(phoenix_runtime::update::check_now)),
       });
       phoenix_ui_desktop::notify(
-         "NyaaCord ready",
+         "Nyaacord ready",
          Some("Open Sunbird in User Settings for plugins, or press Ctrl+Shift+I for DevTools"),
       );
       phoenix_runtime::update::check();
@@ -267,7 +259,7 @@ impl Platform for Desktop {
          Notice::UpdateAvailable(update) => {
             let mut parts = Vec::new();
             if let Some(version) = &update.loader {
-               parts.push(format!("NyaaCord v{version} is available"));
+               parts.push(format!("Nyaacord v{version} is available"));
             }
             if !update.plugins.is_empty() {
                parts.push(format!("plugins: {}", update.plugins.join(", ")));
@@ -277,7 +269,7 @@ impl Platform for Desktop {
             } else {
                parts.join(" · ")
             };
-            phoenix_ui_desktop::notify("NyaaCord updates available", Some(&body));
+            phoenix_ui_desktop::notify("Nyaacord updates available", Some(&body));
          },
          Notice::PluginsUpdated(names) if !names.is_empty() => {
             let body = format!("Reloaded: {}", names.join(", "));
@@ -293,24 +285,24 @@ impl Platform for Desktop {
    }
 
    #[cfg(any(windows, target_os = "linux"))]
-   fn check_app_update(&self) -> Option<Result<Option<phoenix_runtime::update::AppRelease>, String>> {
+   fn check_app_update(
+      &self,
+   ) -> Option<Result<Option<phoenix_runtime::update::AppRelease>, String>> {
       let result = phoenix_updater::Config::from_env()
          .and_then(|cfg| phoenix_updater::check_latest(phoenix_runtime::update::APP_VERSION, &cfg))
-         .map(|check| {
-            match check {
-               phoenix_updater::CheckResult::UpToDate { .. } => None,
-               phoenix_updater::CheckResult::Available(rel) => {
-                  Some(phoenix_runtime::update::AppRelease {
-                     version:      rel.version,
-                     tag_name:     rel.tag_name,
-                     asset_name:   rel.asset_name,
-                     download_url: rel.download_url,
-                     size:         rel.size,
-                     sha256:       rel.sha256,
-                     release_url:  rel.release_url,
-                  })
-               },
-            }
+         .map(|check| match check {
+            phoenix_updater::CheckResult::UpToDate { .. } => None,
+            phoenix_updater::CheckResult::Available(rel) => {
+               Some(phoenix_runtime::update::AppRelease {
+                  version: rel.version,
+                  tag_name: rel.tag_name,
+                  asset_name: rel.asset_name,
+                  download_url: rel.download_url,
+                  size: rel.size,
+                  sha256: rel.sha256,
+                  release_url: rel.release_url,
+               })
+            },
          })
          .map_err(|err| err.to_string());
       Some(result)
@@ -333,11 +325,11 @@ impl Platform for Desktop {
             {
                let ver = outcome.version;
                phoenix_runtime::update::finish(Some(format!(
-                  "Updated to NyaaCord v{ver}. Restart NyaaCord to apply."
+                  "Updated to Nyaacord v{ver}. Restart Nyaacord to apply."
                )));
                phoenix_ui_desktop::notify(
-                  "NyaaCord updated",
-                  Some(&format!("Updated to v{ver}. Restart NyaaCord to apply.")),
+                  "Nyaacord updated",
+                  Some(&format!("Updated to v{ver}. Restart Nyaacord to apply.")),
                );
             }
 
@@ -348,11 +340,11 @@ impl Platform for Desktop {
                if no_relaunch {
                   let ver = outcome.version;
                   phoenix_runtime::update::finish(Some(format!(
-                     "Updated to NyaaCord v{ver}. Restart NyaaCord to apply."
+                     "Updated to Nyaacord v{ver}. Restart Nyaacord to apply."
                   )));
                   phoenix_ui_desktop::notify(
-                     "NyaaCord updated",
-                     Some(&format!("Updated to v{ver}. Restart NyaaCord to apply.")),
+                     "Nyaacord updated",
+                     Some(&format!("Updated to v{ver}. Restart Nyaacord to apply.")),
                   );
                   return;
                }
@@ -364,10 +356,10 @@ impl Platform for Desktop {
                   Ok(()) => {
                      let ver = outcome.version;
                      phoenix_runtime::update::finish(Some(format!(
-                        "Updated to NyaaCord v{ver}. Restarting..."
+                        "Updated to Nyaacord v{ver}. Restarting..."
                      )));
                      phoenix_ui_desktop::notify(
-                        "NyaaCord updated",
+                        "Nyaacord updated",
                         Some(&format!("Updated to v{ver}. Restarting...")),
                      );
                      std::thread::spawn(|| {
@@ -385,11 +377,11 @@ impl Platform for Desktop {
                      log::warn!("relaunch watchdog: {err}");
                      let ver = outcome.version;
                      phoenix_runtime::update::finish(Some(format!(
-                        "Updated to NyaaCord v{ver}. Restart NyaaCord to apply."
+                        "Updated to Nyaacord v{ver}. Restart Nyaacord to apply."
                      )));
                      phoenix_ui_desktop::notify(
-                        "NyaaCord updated",
-                        Some(&format!("Updated to v{ver}. Restart NyaaCord to apply.")),
+                        "Nyaacord updated",
+                        Some(&format!("Updated to v{ver}. Restart Nyaacord to apply.")),
                      );
                   },
                }
@@ -443,26 +435,20 @@ fn dialog(body: &[u8], sheet: bool) -> remote::Reply {
       .options
       .unwrap_or_default()
       .into_iter()
-      .map(|item| {
-         match item {
-            DialogItem::Label(label) => {
-               modal::ChoiceOption {
-                  label,
-                  danger: false,
-               }
-            },
-            DialogItem::Item { label, danger } => modal::ChoiceOption { label, danger },
-         }
+      .map(|item| match item {
+         DialogItem::Label(label) => modal::ChoiceOption {
+            label,
+            danger: false,
+         },
+         DialogItem::Item { label, danger } => modal::ChoiceOption { label, danger },
       })
       .collect::<Vec<_>>();
    let content = if sheet {
-      request.text.map(|text| {
-         modal::ModalSection::Code {
-            title: None,
-            text,
-            monospace: request.monospace.unwrap_or_default(),
-            highlight: request.highlight.unwrap_or_default(),
-         }
+      request.text.map(|text| modal::ModalSection::Code {
+         title: None,
+         text,
+         monospace: request.monospace.unwrap_or_default(),
+         highlight: request.highlight.unwrap_or_default(),
       })
    } else {
       request
@@ -479,8 +465,8 @@ fn dialog(body: &[u8], sheet: bool) -> remote::Reply {
          },
       );
    }
-   let title = request.title.unwrap_or_else(|| "NyaaCord".to_owned());
-   let index = modal::ask(title, content, options, Duration::from_secs(120));
+   let title = request.title.unwrap_or_else(|| "Nyaacord".to_owned());
+   let index = modal::ask(title, content, options, Duration::from_mins(2));
    remote::ok_json(&DialogAnswer { index })
 }
 
@@ -529,7 +515,7 @@ fn resolve_target_appimage(
       return Some(path);
    }
    let dir = sunbird_dir?;
-   let candidate = dir.join("NyaaCord-x86_64.AppImage");
+   let candidate = dir.join("Nyaacord-x86_64.AppImage");
    if (candidate.exists() || dir.is_dir()) && !phoenix_updater::is_mount_path(&candidate) {
       return Some(candidate);
    }
@@ -577,8 +563,8 @@ fn resolve_target_windows_exe(
       return Some(path);
    }
    let base = local_app_data.filter(|dir| !dir.as_os_str().is_empty())?;
-   let dir = base.join("NyaaCord");
-   let exe = dir.join("NyaaCord.exe");
+   let dir = base.join("Nyaacord");
+   let exe = dir.join("Nyaacord.exe");
    if dir_exists(&exe) || dir_exists(&dir) {
       return Some(exe);
    }
@@ -610,16 +596,14 @@ fn run_package_update(
       target_package_path().ok_or_else(|| "no writable launcher path found".to_owned())?;
    let cfg = phoenix_updater::Config::from_env().map_err(|err| err.to_string())?;
    let release = match &update.release {
-      Some(rel) => {
-         phoenix_updater::ReleaseInfo {
-            version:      rel.version.clone(),
-            tag_name:     rel.tag_name.clone(),
-            asset_name:   rel.asset_name.clone(),
-            download_url: rel.download_url.clone(),
-            size:         rel.size,
-            sha256:       rel.sha256.clone(),
-            release_url:  rel.release_url.clone(),
-         }
+      Some(rel) => phoenix_updater::ReleaseInfo {
+         version: rel.version.clone(),
+         tag_name: rel.tag_name.clone(),
+         asset_name: rel.asset_name.clone(),
+         download_url: rel.download_url.clone(),
+         size: rel.size,
+         sha256: rel.sha256.clone(),
+         release_url: rel.release_url.clone(),
       },
       None => phoenix_updater::fetch_latest(&cfg).map_err(|err| err.to_string())?,
    };
@@ -628,9 +612,7 @@ fn run_package_update(
    } else {
       release.version.as_str()
    };
-   phoenix_runtime::update::set_status(Some(format!(
-      "Downloading NyaaCord v{display_version}..."
-   )));
+   phoenix_runtime::update::set_status(Some(format!("Downloading Nyaacord v{display_version}...")));
    let mut last_pct: Option<u64> = None;
    let mut last_mb: u64 = 0;
    let mut on_progress = |downloaded: u64, total: Option<u64>| {
@@ -646,7 +628,7 @@ fn run_package_update(
          if last_pct.is_none_or(|prev| pct >= prev + 5 || (pct == 100 && prev != 100)) {
             last_pct = Some(pct);
             phoenix_runtime::update::set_status(Some(format!(
-               "Downloading NyaaCord v{display_version} ({pct}%)..."
+               "Downloading Nyaacord v{display_version} ({pct}%)..."
             )));
          }
       } else {
@@ -654,7 +636,7 @@ fn run_package_update(
          if mb >= last_mb + 5 {
             last_mb = mb;
             phoenix_runtime::update::set_status(Some(format!(
-               "Downloading NyaaCord v{display_version} ({mb} MiB)..."
+               "Downloading Nyaacord v{display_version} ({mb} MiB)..."
             )));
          }
       }
@@ -670,23 +652,23 @@ mod tests {
    #[test]
    fn detects_appimage_mount_paths() {
       assert!(phoenix_updater::is_mount_path(Path::new(
-         "/tmp/.mount_NyaaCord1234/AppRun"
+         "/tmp/.mount_Nyaacord1234/AppRun"
       )));
       assert!(phoenix_updater::is_mount_path(Path::new(
-         "/home/cate/.t3/tmp/.mount_NyaaCord1234/AppRun"
+         "/home/cate/.t3/tmp/.mount_Nyaacord1234/AppRun"
       )));
       assert!(phoenix_updater::is_mount_path(Path::new("/tmp/.mount_abc")));
       assert!(!phoenix_updater::is_mount_path(Path::new(
-         "/home/cate/.local/share/sunbird/NyaaCord-x86_64.AppImage"
+         "/home/cate/.local/share/sunbird/Nyaacord-x86_64.AppImage"
       )));
       assert!(!phoenix_updater::is_mount_path(Path::new(
-         "/tmp/nyaacord-test/NyaaCord-x86_64.AppImage"
+         "/tmp/nyaacord-test/Nyaacord-x86_64.AppImage"
       )));
    }
 
    #[test]
    fn resolves_target_appimage_without_touching_base_discord() {
-      let managed = PathBuf::from("/home/cate/.local/share/sunbird/NyaaCord-x86_64.AppImage");
+      let managed = PathBuf::from("/home/cate/.local/share/sunbird/Nyaacord-x86_64.AppImage");
       let discord = PathBuf::from("/home/cate/Applications/discord-phoenix.AppImage");
       let custom = PathBuf::from("/home/cate/Apps/custom-chat.AppImage");
 
@@ -702,7 +684,7 @@ mod tests {
          None
       );
 
-      // Standalone renamed NyaaCord AppImage with NYAACORD_APPDIR is accepted.
+      // Standalone renamed Nyaacord AppImage with NYAACORD_APPDIR is accepted.
       assert_eq!(
          resolve_target_appimage(None, Some(custom.clone()), true, None),
          Some(custom)
@@ -711,7 +693,7 @@ mod tests {
       // Mount paths are never selected as targets.
       assert_eq!(
          resolve_target_appimage(
-            Some(PathBuf::from("/var/tmp/.mount_NyaaCo1234/AppRun")),
+            Some(PathBuf::from("/var/tmp/.mount_Nyaaco1234/AppRun")),
             None,
             false,
             None
@@ -722,7 +704,7 @@ mod tests {
 
    #[test]
    fn resolves_target_windows_exe_paths() {
-      let explicit = PathBuf::from(r"D:\Portable\NyaaCord-x86_64.exe");
+      let explicit = PathBuf::from(r"D:\Portable\Nyaacord-x86_64.exe");
       let local = PathBuf::from(r"C:\Users\cate\AppData\Local");
 
       assert_eq!(
@@ -731,10 +713,13 @@ mod tests {
       );
       assert_eq!(
          resolve_target_windows_exe(None, Some(local.clone()), |path| {
-            path == local.join("NyaaCord")
+            path == local.join("Nyaacord")
          }),
-         Some(local.join("NyaaCord").join("NyaaCord.exe"))
+         Some(local.join("Nyaacord").join("Nyaacord.exe"))
       );
-      assert_eq!(resolve_target_windows_exe(None, Some(local), |_| false), None);
+      assert_eq!(
+         resolve_target_windows_exe(None, Some(local), |_| false),
+         None
+      );
    }
 }

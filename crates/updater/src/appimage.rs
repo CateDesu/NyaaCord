@@ -918,16 +918,16 @@ while [ "$j" -lt 8 ]; do
             rm -f "$TMP"
             if (ln "$PREV" "$TMP" 2>/dev/null || cp -f "$PREV" "$TMP") && chmod 0755 "$TMP" && mv -f "$TMP" "$TARGET"; then
                if [ -f "$DIR/version" ]; then
-                  OLD_VER=$(NYAACORD_AUTO_UPDATE=0 "$TARGET" --version 2>/dev/null | sed -n 's/^NyaaCord //p' | head -n 1 | tr -d '\r' | sed 's/^[vV]//' || true)
+                  OLD_VER=$(NYAACORD_AUTO_UPDATE=0 "$TARGET" --version 2>/dev/null | sed -n 's/^Nyaa[Cc]ord //p' | head -n 1 | tr -d '\r' | sed 's/^[vV]//' || true)
                   if [ -n "$OLD_VER" ]; then
                      printf '%s\n' "$OLD_VER" > "$DIR/version" || true
                   fi
                fi
                if command -v notify-send >/dev/null 2>&1; then
                   if [ -f "$DIR/nyaacord.png" ]; then
-                     notify-send --app-name=NyaaCord --hint=string:desktop-entry:sunbird -i "$DIR/nyaacord.png" -- "NyaaCord update rolled back" "The updated AppImage exited early and the previous version was restored." >/dev/null 2>&1 || true
+                     notify-send --app-name=Nyaacord --hint=string:desktop-entry:com.discord.libdiscord -i "$DIR/nyaacord.png" -- "Nyaacord update rolled back" "The updated AppImage exited early and the previous version was restored." >/dev/null 2>&1 || true
                   else
-                     notify-send --app-name=NyaaCord --hint=string:desktop-entry:sunbird -- "NyaaCord update rolled back" "The updated AppImage exited early and the previous version was restored." >/dev/null 2>&1 || true
+                     notify-send --app-name=Nyaacord --hint=string:desktop-entry:com.discord.libdiscord -- "Nyaacord update rolled back" "The updated AppImage exited early and the previous version was restored." >/dev/null 2>&1 || true
                   fi
                fi
                NYAACORD_AUTO_UPDATE=0 "$TARGET" </dev/null >/dev/null 2>&1 &
@@ -1000,10 +1000,10 @@ mod tests {
 
    #[test]
    fn previous_path_appends_suffix() {
-      let p = Path::new("/opt/NyaaCord-x86_64.AppImage");
+      let p = Path::new("/opt/Nyaacord-x86_64.AppImage");
       assert_eq!(
          previous_path(p),
-         PathBuf::from("/opt/NyaaCord-x86_64.AppImage.previous")
+         PathBuf::from("/opt/Nyaacord-x86_64.AppImage.previous")
       );
    }
 
@@ -1019,11 +1019,11 @@ mod tests {
          &appdirs
       ));
       assert!(is_mount_path_with_appdirs(
-         Path::new("/home/cate/.t3/tmp/.mount_NyaaCo9999/NyaaCord.AppImage"),
+         Path::new("/home/cate/.t3/tmp/.mount_NyaaCo9999/Nyaacord.AppImage"),
          &appdirs
       ));
       assert!(is_mount_path_with_appdirs(
-         Path::new("/custom/extracted_appdir/NyaaCord.AppImage"),
+         Path::new("/custom/extracted_appdir/Nyaacord.AppImage"),
          &appdirs
       ));
       assert!(!is_mount_path_with_appdirs(
@@ -1031,7 +1031,7 @@ mod tests {
          &appdirs
       ));
       assert!(!is_mount_path_with_appdirs(
-         Path::new("/home/cate/Apps/NyaaCord.AppImage"),
+         Path::new("/home/cate/Apps/Nyaacord.AppImage"),
          &appdirs
       ));
    }
@@ -1043,5 +1043,17 @@ mod tests {
          sh_quote(path).expect("quoted"),
          "'/tmp/it'\\''s a \"test\"/$HOME/`id`/app.AppImage'"
       );
+   }
+
+   #[test]
+   fn watchdog_script_uses_discord_desktop_entry_hint() {
+      let script = build_watchdog_script(
+         "'/tmp/Nyaacord.AppImage'",
+         "'/tmp/Nyaacord.AppImage.previous'",
+         "'/tmp/nyaacord-updater'",
+         42,
+      );
+      assert!(script.contains("--hint=string:desktop-entry:com.discord.libdiscord"));
+      assert!(!script.contains("--hint=string:desktop-entry:sunbird"));
    }
 }
