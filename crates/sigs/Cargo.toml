@@ -15,5 +15,8 @@ memchr       = { workspace = true }
 object       = { optional = true, workspace = true }
 phoenix-hook = { workspace = true }
 
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+iced-x86 = { workspace = true }
+
 [lints]
 workspace = true

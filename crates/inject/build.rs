@@ -1,4 +1,4 @@
-//! Embeds the `Nyaacord` version, optional Windows DLL and plugin bundle payloads,
+//! Embeds the `NyaaCord` version, optional Windows DLL and plugin bundle payloads,
 //! and Win32 version and icon resources into `phoenix-inject`.
 
 use std::{
@@ -96,10 +96,10 @@ fn append_version_rc(rc: &mut String, version: &str) {
           BEGIN\n\
              BLOCK \"040904B0\"\n\
              BEGIN\n\
-                VALUE \"FileDescription\", \"Nyaacord\\0\"\n\
-                VALUE \"ProductName\", \"Nyaacord\\0\"\n\
-                VALUE \"InternalName\", \"Nyaacord\\0\"\n\
-                VALUE \"OriginalFilename\", \"Nyaacord.exe\\0\"\n\
+                VALUE \"FileDescription\", \"NyaaCord\\0\"\n\
+                VALUE \"ProductName\", \"NyaaCord\\0\"\n\
+                VALUE \"InternalName\", \"NyaaCord\\0\"\n\
+                VALUE \"OriginalFilename\", \"NyaaCord.exe\\0\"\n\
                 VALUE \"FileVersion\", \"{ver}\\0\"\n\
                 VALUE \"ProductVersion\", \"{ver}\\0\"\n\
              END\n\

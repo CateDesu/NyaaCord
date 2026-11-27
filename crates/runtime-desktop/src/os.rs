@@ -184,7 +184,7 @@ mod linux {
    const RC_VALUE: usize = 0x10;
    /// A few frames at 60 Hz, so every window renders one forced frame.
    const FORCE_MS: u64 = 100;
-   const PROCESS_NAME: &CStr = c"Nyaacord";
+   const PROCESS_NAME: &CStr = c"NyaaCord";
 
    static FRAME: OnceLock<Frame> = OnceLock::new();
    static WINDOWS: Mutex<Vec<Window>> = Mutex::new(Vec::new());
@@ -378,7 +378,7 @@ mod linux {
          .expect("join thread");
          let main_after = std::fs::read_to_string("/proc/self/comm").expect("read /proc/self/comm");
 
-         assert_eq!(thread_comm.trim_end_matches('\n'), "Nyaacord");
+         assert_eq!(thread_comm.trim_end_matches('\n'), "NyaaCord");
          assert_eq!(main_before, main_after);
       }
    }

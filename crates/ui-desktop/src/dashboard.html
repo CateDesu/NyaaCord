@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Nyaacord Settings</title>
+<title>NyaaCord Settings</title>
 <link rel="icon" type="image/gif" href="/icon.gif" />
 <style>
   :root {
@@ -275,7 +275,7 @@
 <body>
 <nav>
   <div class="brand">
-    <span class="brand-left"><img class="brand-icon" src="/icon.gif" alt="" /><span id="conn-dot" class="dot"></span><span>Nyaacord</span></span>
+    <span class="brand-left"><img class="brand-icon" src="/icon.gif" alt="" /><span id="conn-dot" class="dot"></span><span>NyaaCord</span></span>
     <span id="version-pill" class="pill">…</span>
   </div>
   <button class="active" data-tab="plugins">Plugins</button>
@@ -328,7 +328,7 @@
     <p class="sub">Check CateDesu/NyaaCord releases for updates. Updating replaces the whole AppImage while keeping your settings and plugins.</p>
     <div class="toolbar">
       <button class="btn primary" id="check-update-btn">Check for updates</button>
-      <button class="btn" id="apply-update-btn" disabled>Update Nyaacord</button>
+      <button class="btn" id="apply-update-btn" disabled>Update NyaaCord</button>
     </div>
     <div id="update-box" class="card"></div>
   </section>
@@ -354,7 +354,7 @@
       <div class="settings" style="border-top:none;padding-top:0;margin-top:0">
         <div class="setting">
           <div class="setting-info"><div>Title</div></div>
-          <div class="setting-ctrl"><input id="dialog-title" type="text" value="Nyaacord" /></div>
+          <div class="setting-ctrl"><input id="dialog-title" type="text" value="NyaaCord" /></div>
         </div>
         <div class="setting">
           <div class="setting-info">
@@ -431,7 +431,7 @@ function setConnected(ok, errMsg = '') {
   if (ok) {
     banner.classList.add('hidden');
   } else {
-    banner.textContent = 'Lost connection to Nyaacord: ' + errMsg;
+    banner.textContent = 'Lost connection to NyaaCord: ' + errMsg;
     banner.classList.remove('hidden');
   }
 }
@@ -544,9 +544,9 @@ async function loadPlugins() {
     if (!status.plugins.length) {
       root.innerHTML = `
         <div class="card">
-          <div class="title" style="margin-bottom:6px">Welcome to Nyaacord</div>
+          <div class="title" style="margin-bottom:6px">Welcome to NyaaCord</div>
           <div class="meta" style="margin-bottom:14px;color:var(--text)">
-            Nyaacord is connected to Phoenix. Install plugins from the official catalog or load a local <code>.js</code> bundle to get started.
+            NyaaCord is connected to Phoenix. Install plugins from the official catalog or load a local <code>.js</code> bundle to get started.
           </div>
           <div class="toolbar" style="margin:0">
             <button class="btn primary" id="empty-browse-btn">Browse Plugin Catalog</button>
@@ -826,7 +826,7 @@ async function loadUpdates(startPollIfBusy = true) {
     if (st.found) {
       if (st.found.loader) {
         const ver = String(st.found.loader).replace(/^v/i, '');
-        const label = esc(`Nyaacord v${ver} is available`);
+        const label = esc(`NyaaCord v${ver} is available`);
         if (isHttpUrl(st.found.release_url)) {
           rows.push(`<div>${label} · <a href="${esc(st.found.release_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">Release notes</a></div>`);
         } else {
@@ -846,7 +846,7 @@ async function loadUpdates(startPollIfBusy = true) {
     const applyBtn = $('#apply-update-btn');
     applyBtn.textContent = hasLoaderUpdate
       ? `Update to v${String(st.found.loader).replace(/^v/i, '')}`
-      : 'Update Nyaacord';
+      : 'Update NyaaCord';
     applyBtn.disabled = !canApply;
     $('#check-update-btn').disabled = !!st.busy;
     if (startPollIfBusy && st.busy && !updatePollActive) {
@@ -881,7 +881,7 @@ async function pollUpdateUntilDone(refreshPlugins) {
       notify(last.status, isErr);
     } else if (last.found && last.found.loader) {
       const ver = String(last.found.loader).replace(/^v/i, '');
-      notify(`Nyaacord v${ver} is available`);
+      notify(`NyaaCord v${ver} is available`);
     }
     if (shouldRefresh) loadPlugins();
   }
@@ -904,7 +904,7 @@ $('#apply-update-btn').onclick = async () => {
   $('#apply-update-btn').disabled = true;
   try {
     await api('/update/apply', { method: 'POST' });
-    notify('Updating Nyaacord…');
+    notify('Updating NyaaCord…');
     pollUpdateUntilDone(true);
   } catch (err) {
     notify(`Update failed: ${err.message}`, true);

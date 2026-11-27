@@ -94,8 +94,8 @@ pub fn check_installed_for_release(
 fn parse_version_output(text: &str) -> Option<String> {
    let line = text.lines().next()?.trim();
    let ver = line
-      .strip_prefix("Nyaacord ")
-      .or_else(|| line.strip_prefix("NyaaCord "))?
+      .strip_prefix("NyaaCord ")
+      .or_else(|| line.strip_prefix("Nyaacord "))?
       .trim();
    (!ver.is_empty()).then(|| version::normalize(ver))
 }
@@ -782,8 +782,8 @@ mod tests {
       ));
       fs::create_dir_all(&dir).expect("create temp dir");
 
-      let target = dir.join("Nyaacord.exe");
-      let staged = dir.join(".Nyaacord.exe.new");
+      let target = dir.join("NyaaCord.exe");
+      let staged = dir.join(".NyaaCord.exe.new");
       let v1 = build_fake_pe64(b"exe-v1");
       let v2 = build_fake_pe64(b"exe-v2-updated");
       fs::write(&target, &v1).expect("write v1");
@@ -847,8 +847,8 @@ mod tests {
       ));
       fs::create_dir_all(&dir).expect("create temp dir");
 
-      let target = dir.join("Nyaacord.exe");
-      let staged = dir.join(".Nyaacord.exe.new");
+      let target = dir.join("NyaaCord.exe");
+      let staged = dir.join(".NyaaCord.exe.new");
       let v1 = build_fake_pe64(b"exe-v1");
       let v2 = build_fake_pe64(b"exe-v2");
       fs::write(&target, &v1).expect("write v1");

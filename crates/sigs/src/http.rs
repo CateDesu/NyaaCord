@@ -7,15 +7,13 @@
 //! intercepts every outgoing request and incoming response without any inline
 //! code patching.
 
+use std::collections::HashMap;
+
+use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind};
 use memchr::memchr_iter;
 use phoenix_hook::{
    image::Image,
-   x86::{
-      Abi,
-      FieldArg,
-      call_target,
-      jump_target,
-   },
+   x86::{Abi, FieldArg, Register, call_target, jump_target},
 };
 
 use crate::Found;
@@ -36,23 +34,40 @@ const BODY_SIZE: usize = 0x38;
 /// A `String` or an `http::Method`.
 const THREE_WORDS: usize = 0x18;
 
+/// Discriminants of `libdiscord_http`'s `Body` enum decoded from
+/// `ReqwestTransport::send`'s body jump table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BodyTags {
+   /// `Body::Empty`.
+   pub empty: u64,
+   /// `Body::Bytes(Bytes)`.
+   pub bytes: u64,
+   /// `Body::BytesWithProgress(Bytes, ..)`, chunked in 64 KiB slices.
+   pub chunked: Option<u64>,
+}
+
 /// Where the send detour finds a `TransportRequest`'s fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RequestLayout {
    pub headers: usize,
-   pub body:    usize,
-   pub url:     usize,
-   pub method:  usize,
+   pub body: usize,
+   pub url: usize,
+   pub method: usize,
+   pub body_tags: BodyTags,
 }
 
 impl RequestLayout {
-   /// Windows `Discord.exe`'s.
-   pub const WINDOWS: Self = Self {
-      headers: 0,
-      body:    0x60,
-      url:     0x98,
-      method:  0xC0,
-   };
+   /// Windows `Discord.exe`'s field offsets, paired with decoded `body_tags`.
+   #[must_use]
+   pub const fn windows(body_tags: BodyTags) -> Self {
+      Self {
+         headers: 0,
+         body: 0x60,
+         url: 0x98,
+         method: 0xC0,
+         body_tags,
+      }
+   }
 }
 
 /// Size of the `Poll<Result<Response, Error>>` the runtime's poll detour
@@ -66,21 +81,21 @@ pub const POLL_RESULT_SIZE: usize = 0x80;
 pub struct DesktopHttpTransport {
    /// All `.rdata` vtable slots holding `ReqwestTransport::send` (may be
    /// duplicated across LLVM CGUs).
-   pub send_slots:   Vec<usize>,
+   pub send_slots: Vec<usize>,
    /// Original `ReqwestTransport::send` function address.
-   pub send_fn:      usize,
+   pub send_fn: usize,
    /// Bytes `send_fn` reaches into the request it is handed.
-   pub send_input:   usize,
+   pub send_input: usize,
    /// The request's fields, when they decode.
-   pub request:      Found<RequestLayout>,
+   pub request: Found<RequestLayout>,
    /// All `.rdata` vtable slots holding `SendFuture::poll`.
-   pub poll_slots:   Vec<usize>,
+   pub poll_slots: Vec<usize>,
    /// Original `SendFuture::poll` function address.
-   pub poll_fn:      usize,
+   pub poll_fn: usize,
    /// Bytes `poll_fn` writes through its hidden return pointer.
-   pub poll_output:  usize,
+   pub poll_output: usize,
    /// Host's `__rust_alloc(size, align)` if located.
-   pub host_alloc:   Option<usize>,
+   pub host_alloc: Option<usize>,
    /// Host's `__rust_dealloc(ptr, size, align)` if located.
    pub host_dealloc: Option<usize>,
 }
@@ -107,7 +122,7 @@ impl DesktopHttpTransport {
          extent(&phoenix_hook::x86::arg_accesses(abi, code, send_fn, 1))
       });
       let request = if send_input <= TRANSPORT_REQUEST_SIZE {
-         Ok(RequestLayout::WINDOWS)
+         body_tags(image, (send_fn, send_end), 0x60, lea).map(RequestLayout::windows)
       } else {
          request_layout(image, abi, (send_fn, send_end), lea, send_input)
       };
@@ -163,13 +178,12 @@ impl DesktopHttpTransport {
    }
 
    /// Whether `SendFuture::poll` returns the [`POLL_RESULT_SIZE`]-byte result
-   /// the poll detour reads and copies. A larger one would overflow the
-   /// detour's copy on the stack, so response hooks stay off.
+   /// the poll detour reads and copies.
    pub fn poll_fits(&self) -> Found<()> {
-      if self.poll_output > POLL_RESULT_SIZE {
+      if self.poll_output != POLL_RESULT_SIZE {
          return Err(format!(
-            "SendFuture::poll fills {:#x} bytes of {POLL_RESULT_SIZE:#x}",
-            self.poll_output
+            "SendFuture::poll at {:#x} fills {:#x} bytes, expected {POLL_RESULT_SIZE:#x}",
+            self.poll_fn, self.poll_output
          ));
       }
       Ok(())
@@ -216,22 +230,22 @@ fn request_layout(
    let mut builders: Vec<(usize, usize)> =
       phoenix_hook::x86::arg_field_calls(abi, code, send_fn, 1)
          .into_iter()
-         .filter_map(|call| {
-            match (call.args[2], call.args[3]) {
-               (Some(FieldArg::Copy(method)), Some(FieldArg::Field(url))) => Some((url, method)),
-               _ => None,
-            }
+         .filter_map(|call| match (call.args[2], call.args[3]) {
+            (Some(FieldArg::Copy(method)), Some(FieldArg::Field(url))) => Some((url, method)),
+            _ => None,
          })
          .collect();
    builders.sort_unstable();
    builders.dedup();
    let (url, method) = crate::one("request builder call", &builders)?;
 
+   let body_tags = body_tags(image, (send_fn, send_end), body, anchor_lea)?;
    let layout = RequestLayout {
       headers: 0,
       body,
       url,
       method,
+      body_tags,
    };
    let mut fields = [
       (layout.headers, HEADER_MAP_SIZE),
@@ -249,6 +263,199 @@ fn request_layout(
       ));
    }
    Ok(layout)
+}
+
+/// Decodes the `Body` enum tags (`Empty`, `Bytes`, and chunked `Bytes`) from
+/// `ReqwestTransport::send`'s body jump table anchored by [`HOST_FILE_ANCHOR`].
+fn body_tags(
+   image: &Image<'_>,
+   bounds: (usize, usize),
+   body_offset: usize,
+   anchor_lea: usize,
+) -> Found<BodyTags> {
+   let cases = find_body_switch_cases(image, bounds, anchor_lea)?;
+   let mut starts: Vec<usize> = cases.iter().map(|&(_, target)| target).collect();
+   starts.sort_unstable();
+   starts.dedup();
+
+   let mut empty = Vec::new();
+   let mut bytes = Vec::new();
+   let mut chunked = Vec::new();
+   for &(tag, target) in &cases {
+      let next_start = starts
+         .iter()
+         .copied()
+         .find(|&start| start > target)
+         .unwrap_or(bounds.1);
+      match classify_body_case(
+         image,
+         target,
+         next_start.min(bounds.1),
+         body_offset,
+         anchor_lea,
+      ) {
+         Some(BodyCase::Empty) => empty.push(tag),
+         Some(BodyCase::Bytes) => bytes.push(tag),
+         Some(BodyCase::Chunked) => chunked.push(tag),
+         None => {},
+      }
+   }
+
+   let empty = crate::one("empty body tag", &empty)?;
+   let bytes = crate::one("bytes body tag", &bytes)?;
+   let chunked = match chunked.as_slice() {
+      [] => None,
+      [only] => Some(*only),
+      many => return Err(format!("chunked body tag matched {} times", many.len())),
+   };
+   Ok(BodyTags {
+      empty,
+      bytes,
+      chunked,
+   })
+}
+
+fn find_body_switch_cases(
+   image: &Image<'_>,
+   (send_fn, send_end): (usize, usize),
+   anchor_lea: usize,
+) -> Found<Vec<(u64, usize)>> {
+   const MAX_CASES: usize = 16;
+   const ANCHOR_WINDOW: usize = 0x40;
+
+   let code = image
+      .read(send_fn, send_end - send_fn)
+      .ok_or("ReqwestTransport::send is unmapped")?;
+   let mut tables: HashMap<Register, usize> = HashMap::new();
+   let mut switch_tables = Vec::new();
+   let mut decoder = Decoder::with_ip(64, code, send_fn as u64, DecoderOptions::NONE);
+   while decoder.can_decode() {
+      let ins = decoder.decode();
+      if ins.is_invalid() {
+         continue;
+      }
+      let dst = (ins.op_count() > 0 && ins.op0_kind() == OpKind::Register)
+         .then(|| ins.op0_register().full_register());
+      if ins.mnemonic() == Mnemonic::Movsxd
+         && ins.op1_kind() == OpKind::Memory
+         && ins.memory_index_scale() == 4
+         && ins.memory_displacement64() == 0
+         && let Some(&table) = tables.get(&ins.memory_base().full_register())
+      {
+         switch_tables.push(table);
+      }
+      if ins.mnemonic() == Mnemonic::Lea
+         && ins.is_ip_rel_memory_operand()
+         && let Some(reg) = dst
+         && let Ok(target) = usize::try_from(ins.ip_rel_memory_address())
+      {
+         tables.insert(reg, target);
+      } else if let Some(reg) = dst {
+         tables.remove(&reg);
+      }
+   }
+   switch_tables.sort_unstable();
+   switch_tables.dedup();
+
+   let mut matched = Vec::new();
+   for (idx, &table) in switch_tables.iter().enumerate() {
+      let next_table = switch_tables.get(idx + 1).copied().unwrap_or(usize::MAX);
+      let mut cases = Vec::new();
+      for case in 0..MAX_CASES {
+         let slot = table + 4 * case;
+         if slot >= next_table {
+            break;
+         }
+         let Some(target) = image
+            .read_u32(slot)
+            .and_then(|entry| table.checked_add_signed(entry.cast_signed() as isize))
+            .filter(|&target| (send_fn..send_end).contains(&target))
+         else {
+            break;
+         };
+         cases.push((case as u64, target));
+      }
+      if cases
+         .iter()
+         .any(|&(_, target)| target <= anchor_lea && anchor_lea - target <= ANCHOR_WINDOW)
+      {
+         matched.push(cases);
+      }
+   }
+   match matched.as_slice() {
+      [only] => Ok(only.clone()),
+      other => Err(format!("body switch table matched {} times", other.len())),
+   }
+}
+
+#[derive(Clone, Copy)]
+enum BodyCase {
+   Empty,
+   Bytes,
+   Chunked,
+}
+
+fn classify_body_case(
+   image: &Image<'_>,
+   target: usize,
+   limit: usize,
+   body_offset: usize,
+   anchor_lea: usize,
+) -> Option<BodyCase> {
+   const CHUNK_SIZE: u64 = 0x10000;
+   const CASE_SPAN: usize = 0x140;
+
+   let end = limit.min(target + CASE_SPAN);
+   let slice = image.read(target, end.checked_sub(target)?)?;
+   let mut loads_chunk_size = false;
+   let mut reads_bytes_head = false;
+   let mut reads_bytes_mid = false;
+   let mut reads_tail = false;
+
+   let mut dec = Decoder::with_ip(64, slice, target as u64, DecoderOptions::NONE);
+   while dec.can_decode() {
+      let ins = dec.decode();
+      if ins.is_invalid() {
+         break;
+      }
+      if usize::try_from(ins.ip()).ok() == Some(anchor_lea) {
+         return None;
+      }
+      if ins.mnemonic() == Mnemonic::Mov
+         && ins.op_count() >= 2
+         && ins.try_immediate(1).ok() == Some(CHUNK_SIZE)
+      {
+         loads_chunk_size = true;
+      }
+      if ins.op_count() >= 2
+         && ins.op1_kind() == OpKind::Memory
+         && ins.memory_index() == Register::None
+         && !ins.is_ip_rel_memory_operand()
+         && !matches!(ins.memory_base(), Register::RSP | Register::RBP)
+         && let Ok(disp) = usize::try_from(ins.memory_displacement64().cast_signed())
+      {
+         if disp == body_offset + 0x08 {
+            reads_bytes_head = true;
+         } else if disp == body_offset + 0x18 {
+            reads_bytes_mid = true;
+         } else if disp == body_offset + 0x28 || disp == body_offset + 0x30 {
+            reads_tail = true;
+         }
+      }
+      if matches!(ins.mnemonic(), Mnemonic::Ret | Mnemonic::Jmp) {
+         break;
+      }
+   }
+
+   if loads_chunk_size && reads_bytes_head {
+      Some(BodyCase::Chunked)
+   } else if reads_bytes_head && reads_bytes_mid && !reads_tail {
+      Some(BodyCase::Bytes)
+   } else if !reads_bytes_head && !reads_bytes_mid && !reads_tail {
+      Some(BodyCase::Empty)
+   } else {
+      None
+   }
 }
 
 /// The end of the furthest `(offset, size)` access, 0 when there is none.

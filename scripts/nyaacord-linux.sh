@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs Nyaacord for Linux desktop Phoenix from a Nyaacord AppImage, a cloned
+# Installs NyaaCord for Linux desktop Phoenix from a NyaaCord AppImage, a cloned
 # checkout, a local loader, or the latest GitHub release.
 set -eu
 
@@ -29,7 +29,7 @@ usage() {
 Usage: scripts/nyaacord-linux.sh [options] [AppImage-or-discord-phoenix-path]
 
 Options:
-  --uninstall           Remove Nyaacord launcher, data files, and desktop entry
+  --uninstall           Remove NyaaCord launcher, data files, and desktop entry
   --no-runtime          Configure desktop entry to launch with gate only
   --gate-only           Alias for --no-runtime
   --version <ver>       Seed installed version metadata for local checkout installs
@@ -84,8 +84,8 @@ done
 
 is_nyaacord_desktop_entry() {
    [ -f "$1" ] || return 1
-   grep -Fq "X-Nyaacord-Managed=true" "$1" 2>/dev/null \
-      || grep -Fq "X-NyaaCord-Managed=true" "$1" 2>/dev/null \
+   grep -Fxq "X-NyaaCord-Managed=true" "$1" 2>/dev/null \
+      || grep -Fxq "X-Nyaacord-Managed=true" "$1" 2>/dev/null \
       || grep -Fq "$home/sunbird" "$1" 2>/dev/null \
       || grep -Eq '^Name=Nyaa[Cc]ord$' "$1" 2>/dev/null
 }
@@ -96,7 +96,7 @@ if [ "$uninstall" = 1 ]; then
       rm -f "$entry"
    fi
    refresh_desktop_cache "$data/applications"
-   echo "Nyaacord is uninstalled. Discord itself was not changed."
+   echo "NyaaCord is uninstalled. Discord itself was not changed."
    exit 0
 fi
 
@@ -124,7 +124,7 @@ fi
 # LD_PRELOAD splits on spaces and colons, and desktop Exec needs quoting for the rest.
 case $home in
    *[[:space:]:\"\$\`\\\']*)
-      echo "Nyaacord can't be installed under $home: set XDG_DATA_HOME to a path without spaces, colons or quotes." >&2
+      echo "NyaaCord can't be installed under $home: set XDG_DATA_HOME to a path without spaces, colons or quotes." >&2
       exit 1
       ;;
 esac
@@ -264,7 +264,7 @@ PY
 }
 
 install_updater_binary() {
-   for cand in "$home/Nyaacord-x86_64.AppImage" "$home/NyaaCord-x86_64.AppImage"; do
+   for cand in "$managed_appimage" "$legacy_appimage"; do
       if [ -f "$cand" ] &&
          extract_from_appimage "$cand" "usr/bin/nyaacord-updater" "$WORK/nyaacord-updater"; then
          tmp=$(mktemp "$home/nyaacord-updater.XXXXXX")
@@ -281,8 +281,8 @@ install_updater_binary() {
       fi
       rm -f "$tmp"
    fi
-   if [ -n "$repo_root" ] && [ -f "$repo_root/dist/Nyaacord-x86_64.AppImage" ] &&
-      extract_from_appimage "$repo_root/dist/Nyaacord-x86_64.AppImage" "usr/bin/nyaacord-updater" "$WORK/nyaacord-updater"; then
+   if [ -n "$repo_root" ] && [ -f "$repo_root/dist/NyaaCord-x86_64.AppImage" ] &&
+      extract_from_appimage "$repo_root/dist/NyaaCord-x86_64.AppImage" "usr/bin/nyaacord-updater" "$WORK/nyaacord-updater"; then
       tmp=$(mktemp "$home/nyaacord-updater.XXXXXX")
       if cp "$WORK/nyaacord-updater" "$tmp" && chmod +x "$tmp" && mv -f "$tmp" "$home/nyaacord-updater"; then
          return 0
@@ -388,8 +388,9 @@ verify_sha256sums_file() {
       /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
       {
          h = tolower($1)
-         if (h !~ /^[0-9a-f]{64}$/) next
+         if (length(h) != 64 || h ~ /[^0-9a-f]/) next
          f = $2
+         sub(/\r$/, "", f)
          sub(/^\*/, "", f)
          sub(/^\.\//, "", f)
          if (f == target) {
@@ -429,7 +430,8 @@ PY
 mkdir -p "$home" "$data/applications"
 rm -f "$home"/sunbird.png "$home"/sunbird-*.png
 
-managed_appimage="$home/Nyaacord-x86_64.AppImage"
+managed_appimage="$home/NyaaCord-x86_64.AppImage"
+legacy_appimage="$home/Nyaacord-x86_64.AppImage"
 discord=
 mode=
 
@@ -443,9 +445,9 @@ elif [ -n "$arg_path" ]; then
       mode=local_loader
       discord=$arg_path
    fi
-elif [ -n "$repo_root" ] && [ -f "$repo_root/dist/Nyaacord-x86_64.AppImage" ] &&
-   is_nyaacord_appimage "$repo_root/dist/Nyaacord-x86_64.AppImage"; then
-   arg_path="$repo_root/dist/Nyaacord-x86_64.AppImage"
+elif [ -n "$repo_root" ] && [ -f "$repo_root/dist/NyaaCord-x86_64.AppImage" ] &&
+   is_nyaacord_appimage "$repo_root/dist/NyaaCord-x86_64.AppImage"; then
+   arg_path="$repo_root/dist/NyaaCord-x86_64.AppImage"
    mode=appimage_file
 elif [ -n "$repo_root" ] && [ -r "$repo_root/target/release/libphoenix.so" ]; then
    mode=local_loader
@@ -455,7 +457,7 @@ fi
 
 case "$mode" in
    appimage_file)
-      tmp=$(mktemp "$home/Nyaacord-x86_64.AppImage.XXXXXX")
+      tmp=$(mktemp "$home/NyaaCord-x86_64.AppImage.XXXXXX")
       if ! cp "$arg_path" "$tmp" || ! chmod +x "$tmp" || ! mv -f "$tmp" "$managed_appimage"; then
          rm -f "$tmp"
          echo "Failed to install AppImage to $managed_appimage" >&2
@@ -472,10 +474,9 @@ case "$mode" in
       else
          printf '%s\n' "$seed_version" > "$home/version"
       fi
-      rm -f "$home/libphoenix.so" "$home/libplm.plugins.so" \
-         "$home/NyaaCord-x86_64.AppImage" "$home/NyaaCord-x86_64.AppImage.previous"
+      rm -f "$home/libphoenix.so" "$home/libplm.plugins.so"
       install_updater_binary || true
-      echo "Installed Nyaacord AppImage to $managed_appimage"
+      echo "Installed NyaaCord AppImage to $managed_appimage"
       ;;
    local_loader)
       loader_src=$local_loader
@@ -483,7 +484,7 @@ case "$mode" in
          loader_src="$repo_root/target/release/libphoenix.so"
       fi
       if [ -z "$loader_src" ]; then
-         echo "No local libphoenix.so found. Build it first or pass a Nyaacord AppImage." >&2
+         echo "No local libphoenix.so found. Build it first or pass a NyaaCord AppImage." >&2
          exit 1
       fi
       if [ -z "$discord" ]; then
@@ -500,7 +501,6 @@ EOF
          exit 1
       fi
       [ -x "$discord" ] || chmod +x "$discord"
-      rm -f "$managed_appimage" "$home/NyaaCord-x86_64.AppImage" "$home/NyaaCord-x86_64.AppImage.previous"
       tmp=$(mktemp "$home/libphoenix.so.XXXXXX")
       if ! cp "$loader_src" "$tmp" || ! mv -f "$tmp" "$home/libphoenix.so"; then
          rm -f "$tmp"
@@ -513,24 +513,31 @@ EOF
       echo "Installed local loader $loader_src (version $seed_version) for $discord"
       ;;
    download_release)
-      echo "Downloading latest Nyaacord release from $repo..."
+      echo "Downloading latest NyaaCord release from $repo..."
       if install_updater_binary && [ -x "$home/nyaacord-updater" ]; then
          "$home/nyaacord-updater" update --current "0.0.0" --target "$managed_appimage" --repo "$repo"
       else
-         url="https://github.com/$repo/releases/latest/download/Nyaacord-x86_64.AppImage"
          sums_url="https://github.com/$repo/releases/latest/download/SHA256SUMS.txt"
          sums_file="$WORK/SHA256SUMS.txt"
          if ! curl -fsSL --proto =https --proto-redir =https -o "$sums_file" "$sums_url" || [ ! -s "$sums_file" ]; then
             echo "Failed to download $sums_url" >&2
             exit 1
          fi
-         tmp=$(mktemp "$home/Nyaacord-x86_64.AppImage.XXXXXX")
+         asset=$(awk '
+            /^[[:space:]]*#/ || length($1) != 64 || $1 ~ /[^0-9a-fA-F]/ { next }
+            {f=$2; sub(/\r$/, "", f); sub(/^\*/, "", f); sub(/^\.\//, "", f)}
+            f == "NyaaCord-x86_64.AppImage" {print f; found=1; exit}
+            f == "Nyaacord-x86_64.AppImage" {old=f}
+            END {if (!found) print old}' "$sums_file")
+         [ -n "$asset" ] || { echo "AppImage missing from SHA256SUMS.txt" >&2; exit 1; }
+         url="https://github.com/$repo/releases/latest/download/$asset"
+         tmp=$(mktemp "$home/NyaaCord-x86_64.AppImage.XXXXXX")
          if ! curl -fsSL --proto =https --proto-redir =https -o "$tmp" "$url" || [ ! -s "$tmp" ]; then
             rm -f "$tmp"
             echo "Failed to download $url" >&2
             exit 1
          fi
-         if ! verify_sha256sums_file "$sums_file" "$tmp" "Nyaacord-x86_64.AppImage" || ! is_type2_appimage "$tmp"; then
+         if ! verify_sha256sums_file "$sums_file" "$tmp" "$asset" || ! is_type2_appimage "$tmp"; then
             rm -f "$tmp"
             echo "Downloaded release failed verification" >&2
             exit 1
@@ -544,10 +551,9 @@ EOF
       else
          printf '%s\n' "$seed_version" > "$home/version"
       fi
-      rm -f "$home/libphoenix.so" "$home/libplm.plugins.so" \
-         "$home/NyaaCord-x86_64.AppImage" "$home/NyaaCord-x86_64.AppImage.previous"
+      rm -f "$home/libphoenix.so" "$home/libplm.plugins.so"
       install_updater_binary || true
-      echo "Downloaded Nyaacord AppImage to $managed_appimage"
+      echo "Downloaded NyaaCord AppImage to $managed_appimage"
       ;;
 esac
 
@@ -570,14 +576,15 @@ rm -f "$gif_tmp"
 icon=com.discord.libdiscord
 [ ! -f "$home/nyaacord.png" ] || icon=$home/nyaacord.png
 
-cat > "$home/sunbird" <<EOF
+launcher_tmp=$(mktemp "$home/sunbird.XXXXXX")
+cat > "$launcher_tmp" <<EOF
 #!/bin/sh
 set -eu
 
 home=$(q "$home")
 discord=$(q "$discord")
 default_repo=$(q "$repo")
-managed="\$home/Nyaacord-x86_64.AppImage"
+managed="\$home/NyaaCord-x86_64.AppImage"
 updater="\$home/nyaacord-updater"
 
 export NYAACORD_MANAGED_APPIMAGE="\$managed"
@@ -652,7 +659,6 @@ sync_from_managed() {
          rm -f "\$gtmp"
       fi
    fi
-   rm -f "\$home/NyaaCord-x86_64.AppImage" "\$home/NyaaCord-x86_64.AppImage.previous"
    rm -rf "\$tmpd"
 }
 
@@ -661,11 +667,11 @@ usage() {
 Usage: sunbird [options] [-- Discord arguments]
 
 Options:
-  --check-update        Check GitHub Releases for a newer Nyaacord version
-  --update              Download and install the latest Nyaacord AppImage
-  --rollback            Restore the previous Nyaacord AppImage backup
+  --check-update        Check GitHub Releases for a newer NyaaCord version
+  --update              Download and install the latest NyaaCord AppImage
+  --rollback            Restore the previous NyaaCord AppImage backup
   --no-runtime          Launch with only the access gate opened
-  --version             Print installed Nyaacord version
+  --version             Print installed NyaaCord version
   --help                Show this help message
 USAGE
 }
@@ -685,7 +691,7 @@ cur_ver=\$(current_version)
 
 case "\${1:-}" in
    --version)
-      printf 'Nyaacord %s\n' "\$cur_ver"
+      printf 'NyaaCord %s\n' "\$cur_ver"
       exit 0
       ;;
    --help|-h)
@@ -770,9 +776,9 @@ if [ -x "\$managed" ]; then
                sync_from_managed
                if command -v notify-send >/dev/null 2>&1; then
                   if [ -f "\$home/nyaacord.png" ]; then
-                     notify-send --app-name=Nyaacord --hint=string:desktop-entry:com.discord.libdiscord -i "\$home/nyaacord.png" "Nyaacord" "Update failed to start. Rolled back to previous version." || true
+                     notify-send --app-name=NyaaCord --hint=string:desktop-entry:com.discord.libdiscord -i "\$home/nyaacord.png" "NyaaCord" "Update failed to start. Rolled back to previous version." || true
                   else
-                     notify-send --app-name=Nyaacord --hint=string:desktop-entry:com.discord.libdiscord "Nyaacord" "Update failed to start. Rolled back to previous version." || true
+                     notify-send --app-name=NyaaCord --hint=string:desktop-entry:com.discord.libdiscord "NyaaCord" "Update failed to start. Rolled back to previous version." || true
                   fi
                fi
                exec env NYAACORD_AUTO_UPDATE=0 "\$managed" "\$@"
@@ -785,11 +791,11 @@ if [ -x "\$managed" ]; then
 fi
 
 if [ -z "\$discord" ] || [ ! -x "\$discord" ]; then
-   echo "No managed Nyaacord AppImage and no Discord Phoenix client found." >&2
+   echo "No managed NyaaCord AppImage and no Discord Phoenix client found." >&2
    exit 1
 fi
 if [ ! -r "\$home/libphoenix.so" ]; then
-   echo "Cannot read the Nyaacord loader at \$home/libphoenix.so" >&2
+   echo "Cannot read the NyaaCord loader at \$home/libphoenix.so" >&2
    exit 1
 fi
 
@@ -865,7 +871,8 @@ fi
 export LD_PRELOAD="\$home/libphoenix.so\${LD_PRELOAD:+:\$LD_PRELOAD}"
 exec "\$discord" "\$@"
 EOF
-chmod +x "$home/sunbird"
+chmod +x "$launcher_tmp"
+mv -f "$launcher_tmp" "$home/sunbird"
 
 exec_args=
 [ -n "$no_runtime" ] && exec_args=" --no-runtime"
@@ -874,9 +881,9 @@ entry_tmp=$(mktemp "$data/applications/com.discord.libdiscord.desktop.XXXXXX")
 cat > "$entry_tmp" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Nyaacord
+Name=NyaaCord
 GenericName=Internet Messenger
-Comment=Nyaacord for Discord Phoenix
+Comment=NyaaCord for Discord Phoenix
 Exec="$home/sunbird"$exec_args %U
 Icon=$icon
 StartupWMClass=com.discord.libdiscord
@@ -884,11 +891,19 @@ StartupNotify=true
 Terminal=false
 Categories=Network;InstantMessaging;
 MimeType=x-scheme-handler/discord;
-X-Nyaacord-Managed=true
+X-NyaaCord-Managed=true
 EOF
 chmod 0644 "$entry_tmp"
 mv -f "$entry_tmp" "$entry"
+
+[ "$mode" != local_loader ] || rm -f "$managed_appimage" "$managed_appimage.previous"
+# On case-folded filesystems both paths can refer to the new installation.
+for suffix in '' .previous; do
+   if [ ! "$legacy_appimage$suffix" -ef "$managed_appimage$suffix" ]; then
+      rm -f "$legacy_appimage$suffix"
+   fi
+done
 rm -f "$legacy_entry"
 refresh_desktop_cache "$data/applications"
 
-echo "Nyaacord is installed. Open \"Nyaacord\" from your app menu or run $home/sunbird."
+echo "NyaaCord is installed. Open \"NyaaCord\" from your app menu or run $home/sunbird."

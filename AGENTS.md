@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Nyaacord patches Phoenix, Discord's native Rust Android client, and runs TypeScript plugins
+NyaaCord patches Phoenix, Discord's native Rust Android client, and runs TypeScript plugins
 inside it. Target build is 356.7 Alpha, versionCode 356207. "Phoenix" is Discord's client. The
 runtime, the crates and the plugin global are all named `phoenix`.
 
@@ -43,16 +43,16 @@ Read this file before changing code. Every fact here cost someone hours to learn
 | `crates/runtime/src/gateway.rs` | Gateway event hooks by swapping handler pointers in Phoenix's event registry. |
 | `crates/runtime/src/discord.rs` | `phoenix.discord`, Discord's API with Phoenix's own session. The platforms carry the requests. |
 | `crates/runtime/src/update.rs` | Update checks against the site and one-tap plugin updates. |
-| `crates/runtime/src/remote.rs` | The debug shell on `127.0.0.1:4242`, off by default on Android, switched on in Settings, Nyaacord, Debug. The platforms add their own endpoints. |
+| `crates/runtime/src/remote.rs` | The debug shell on `127.0.0.1:4242`, off by default on Android, switched on in Settings, NyaaCord, Debug. The platforms add their own endpoints. |
 | `crates/runtime-mobile` | phoenix on Phoenix's Android and iOS clients, started by the loader there. iOS has no installer or staff hook, and uses Foundation HTTP and a bundled SQLite. |
 | `crates/runtime-mobile/src/bridge/` | The sinks every guest/host frame passes, returning `Action::{Pass, Drop, Replace}`. `jni.rs` patches the JNI table on `GuestHost.invoke`/`applyOps` and rebinds `nativeDispatch`. `ios.rs` swaps the dispatch slot in the guest's vtable and the call slot in the host callbacks' vtable. |
-| `crates/runtime-mobile/src/settings/` | The Nyaacord settings pages, built from UI ops. |
+| `crates/runtime-mobile/src/settings/` | The NyaaCord settings pages, built from UI ops. |
 | `crates/runtime-mobile/src/patches/` | UI patch targets, slash commands, profile tabs, emoji picker. |
 | `crates/runtime-mobile/src/discord.rs` | Plugin requests to Discord through Phoenix's own `Networking` module. |
 | `crates/runtime-mobile/src/host.rs` | Phoenix's host call, event and field numbers, read at startup from the name table in the installed APK's dex, or the host's Swift name table on iOS. `host::send` and `host::ask` call host modules. |
 | `crates/runtime-mobile/src/picker.rs` | File picker, toasts, clipboard and links through Phoenix's host modules. |
 | `crates/runtime-mobile/src/install.rs`, `loader.rs` | The APK self-update, and Android's installer opened on it through Discord's `FileProvider`. |
-| `crates/runtime-desktop` | phoenix on Desktop Phoenix (`Discord.exe`): the access gate, the HTTP transport hooks, the Nyaacord pages in User Settings, message accessories and the tray. |
+| `crates/runtime-desktop` | phoenix on Desktop Phoenix (`Discord.exe`): the access gate, the HTTP transport hooks, the NyaaCord pages in User Settings, message accessories and the tray. |
 | `crates/ui-mobile` | Typed codec for mobile (Android/iOS) Phoenix UI-op batches. `src/props.in` is Phoenix's prop table, `templates.json` holds captured layouts, `motion.rs` drives native springs, `mirror.rs` keeps a live copy of the view tree that host tests can drive. |
 | `crates/ui-desktop` | Desktop UI host primitives (clipboard, URLs, notifications, GPUI surface hooks). |
 | `crates/wire` | Tagged values and bridge frames (`HostCall`, `DispatchEvent`). |

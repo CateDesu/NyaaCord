@@ -14,8 +14,10 @@
 use std::{
    borrow::Cow,
    ffi::c_void,
+   ops::Range,
    panic::{self, AssertUnwindSafe},
-   ptr, slice, str,
+   ptr::{self, NonNull},
+   slice, str,
    sync::{
       Arc, OnceLock,
       atomic::{AtomicPtr, Ordering},
@@ -140,12 +142,22 @@ struct RawVec {
 
 #[repr(C)]
 struct RawBytesVtable {
-   clone: unsafe extern "C" fn(&AtomicPtr<()>, *const u8, usize) -> RawBytes,
-   to_vec: unsafe extern "C" fn(*mut (), *const u8, usize) -> RawVec,
-   to_mut: unsafe extern "C" fn(*mut (), *const u8, usize) -> RawBytes,
-   is_unique: unsafe extern "C" fn(&AtomicPtr<()>) -> bool,
-   drop: unsafe extern "C" fn(*mut (), *const u8, usize),
+   clone: unsafe fn(&AtomicPtr<()>, *const u8, usize) -> RawBytes,
+   // bytes 1.12 consumes the handle and passes the loaded data pointer.
+   to_vec: unsafe fn(*mut (), *const u8, usize) -> RawVec,
+   to_mut: unsafe fn(*mut (), *const u8, usize) -> RawBytesMut,
+   is_unique: unsafe fn(&AtomicPtr<()>) -> bool,
+   drop: unsafe fn(*mut (), *const u8, usize),
 }
+
+#[repr(C)]
+struct RawBytesMut {
+   ptr: NonNull<u8>,
+   len: usize,
+   cap: usize,
+   data: *mut (),
+}
+const _: () = assert!(size_of::<RawBytesMut>() == 0x20);
 
 #[repr(C)]
 struct RawBytes {
@@ -158,7 +170,8 @@ struct RawBytes {
 #[repr(C)]
 struct RawHeaderBucket {
    tag: u64,
-   _pad0: [u64; 2],
+   next_extra: usize,
+   tail_extra: usize,
    value: RawBytes,
    _sens: u64,
    name: RawBytes,
@@ -167,12 +180,26 @@ struct RawHeaderBucket {
 const _: () = assert!(size_of::<RawHeaderBucket>() == 0x68);
 
 #[repr(C)]
+struct RawExtraValue {
+   prev_tag: u64,
+   prev_idx: usize,
+   next_tag: u64,
+   next_idx: usize,
+   value: RawBytes,
+   _sens: u64,
+}
+const _: () = assert!(size_of::<RawExtraValue>() == 0x48);
+
+#[repr(C)]
 struct RawHeaderMap {
    _head: [u64; 3],
    entries_cap: usize,
-   entries_ptr: *const RawHeaderBucket,
+   entries_ptr: *mut RawHeaderBucket,
    entries_len: usize,
-   _tail: [u64; 6],
+   extra_cap: usize,
+   extra_ptr: *mut RawExtraValue,
+   extra_len: usize,
+   _tail: [u64; 3],
 }
 const _: () = assert!(size_of::<RawHeaderMap>() == 0x60);
 
@@ -192,7 +219,7 @@ const _: () = assert!(size_of::<RawMethod>() == 0x18);
 
 /// A `TransportRequest`'s fields, where [`RequestLayout`] puts them.
 struct RawTransportRequest<'a> {
-   headers: &'a RawHeaderMap,
+   headers: &'a mut RawHeaderMap,
    body: &'a mut RawBody,
    url: &'a mut RawVec,
    method: &'a RawMethod,
@@ -210,7 +237,7 @@ impl RawTransportRequest<'_> {
       // SAFETY: the caller's layout puts each field at its offset.
       unsafe {
          Self {
-            headers: &*req.add(layout.headers).cast::<RawHeaderMap>(),
+            headers: &mut *req.add(layout.headers).cast::<RawHeaderMap>(),
             body: &mut *req.add(layout.body).cast::<RawBody>(),
             url: &mut *req.add(layout.url).cast::<RawVec>(),
             method: &*req.add(layout.method).cast::<RawMethod>(),
@@ -299,11 +326,7 @@ fn make_owned_bytes(data: Vec<u8>) -> RawBytes {
    }
 }
 
-unsafe extern "C" fn owned_bytes_clone(
-   data: &AtomicPtr<()>,
-   ptr: *const u8,
-   len: usize,
-) -> RawBytes {
+unsafe fn owned_bytes_clone(data: &AtomicPtr<()>, ptr: *const u8, len: usize) -> RawBytes {
    let raw = data.load(Ordering::Relaxed);
    if !raw.is_null() {
       // SAFETY: `raw` came from `Arc::into_raw` in `make_owned_bytes`.
@@ -317,61 +340,62 @@ unsafe extern "C" fn owned_bytes_clone(
    }
 }
 
-unsafe extern "C" fn owned_bytes_to_vec(data: *mut (), ptr: *const u8, len: usize) -> RawVec {
-   let out = if len > 0
-      && !ptr.is_null()
-      && let Some(alloc) = INSTALLED.get().and_then(|inst| inst.host_alloc)
-   {
-      // SAFETY: allocate using the host's own `__rust_alloc(len, 1)`.
-      let dst = unsafe { alloc(len, 1) };
-      if dst.is_null() {
-         RawVec {
-            cap: 0,
-            ptr: ptr::null_mut(),
-            len: 0,
-         }
-      } else {
-         // SAFETY: `ptr` is valid for `len` bytes and `dst` is freshly
-         // allocated.
-         unsafe { ptr::copy_nonoverlapping(ptr, dst, len) };
-         RawVec {
-            cap: len,
-            ptr: dst,
-            len,
-         }
-      }
+unsafe fn owned_bytes_to_vec(data: *mut (), ptr: *const u8, len: usize) -> RawVec {
+   let dst = if len == 0 {
+      NonNull::<u8>::dangling()
    } else {
-      RawVec {
-         cap: 0,
-         ptr: ptr::null_mut(),
-         len: 0,
-      }
+      let Some(alloc) = INSTALLED.get().and_then(|inst| inst.host_alloc) else {
+         std::process::abort();
+      };
+      // SAFETY: the host allocator supplies a buffer it can later free.
+      let Some(buffer) = NonNull::new(unsafe { alloc(len, 1) }) else {
+         std::process::abort();
+      };
+      // SAFETY: the handle owns `len` initialized bytes until it is dropped.
+      unsafe { ptr::copy_nonoverlapping(ptr, buffer.as_ptr(), len) };
+      buffer
    };
    // SAFETY: `to_vec` consumes the `Bytes` instance.
    unsafe { owned_bytes_drop(data, ptr, len) };
-   out
-}
-
-unsafe extern "C" fn owned_bytes_to_mut(data: *mut (), ptr: *const u8, len: usize) -> RawBytes {
-   // Fallback: keep our owned bytes intact; callers only invoke `to_mut` if
-   // they try to mutate a request body after `send`, which `reqwest` does not.
-   RawBytes {
-      vtable: &raw const OWNED_BYTES_VTABLE,
-      ptr,
+   RawVec {
+      cap: len,
+      ptr: dst.as_ptr(),
       len,
-      data: AtomicPtr::new(data),
    }
 }
 
-const unsafe extern "C" fn owned_bytes_is_unique(_data: &AtomicPtr<()>) -> bool {
+unsafe fn owned_bytes_to_mut(data: *mut (), ptr: *const u8, len: usize) -> RawBytesMut {
+   // SAFETY: both conversions consume the same handle and take ownership of the copy.
+   let vec = unsafe { owned_bytes_to_vec(data, ptr, len) };
+   // BytesMut stores the original capacity hint and the owned Vec flag here.
+   let capacity_hint = (vec.cap >> 10)
+      .checked_ilog2()
+      .map_or(0, |width| width + 1)
+      .min(7);
+   RawBytesMut {
+      // SAFETY: even an empty host Vec carries a non-null dangling pointer.
+      ptr: unsafe { NonNull::new_unchecked(vec.ptr) },
+      len: vec.len,
+      cap: vec.cap,
+      data: ptr::without_provenance_mut(1 | ((capacity_hint as usize) << 2)),
+   }
+}
+
+const unsafe fn owned_bytes_is_unique(_data: &AtomicPtr<()>) -> bool {
    false
 }
 
-unsafe extern "C" fn owned_bytes_drop(data: *mut (), _ptr: *const u8, _len: usize) {
+unsafe fn owned_bytes_drop(data: *mut (), _ptr: *const u8, _len: usize) {
    if !data.is_null() {
       // SAFETY: matches the `Arc::into_raw` / `increment_strong_count` pair.
       drop(unsafe { Arc::from_raw(data.cast::<Vec<u8>>()) });
    }
+}
+
+unsafe fn replace_bytes(target: &mut RawBytes, replacement: RawBytes) {
+   let old = std::mem::replace(target, replacement);
+   // SAFETY: the old handle and its vtable are live and this consumes it.
+   unsafe { ((*old.vtable).drop)(old.data.into_inner(), old.ptr, old.len) };
 }
 
 // ---------------------------------------------------------------------------
@@ -516,33 +540,85 @@ unsafe fn read_headers(map: &RawHeaderMap) -> Vec<(String, String)> {
    let buckets = unsafe { slice::from_raw_parts(map.entries_ptr, map.entries_len) };
    let mut out = Vec::with_capacity(buckets.len());
    for bucket in buckets {
-      // `Option<Links>` stores its discriminant in the low byte; upper bytes
-      // may be padding.
-      if (bucket.tag & 0xFF) == 2 {
+      // SAFETY: all buckets come from the host HeaderMap.
+      let Some(name) = (unsafe { header_name(bucket) }) else {
          continue;
-      }
-      let name = if bucket.name.vtable.is_null() {
-         let idx = (bucket.name.ptr as usize) & 0xFF;
-         let Some(&std_name) = STANDARD_HEADERS.get(idx) else {
-            continue;
-         };
-         std_name.to_owned()
-      } else {
-         // SAFETY: non-null vtable means `Custom(Bytes)` holding valid ASCII
-         // header name.
-         let bytes = unsafe { read_bytes(&bucket.name) };
-         let Ok(text) = str::from_utf8(bytes) else {
-            continue;
-         };
-         text.to_owned()
       };
       // SAFETY: `bucket.value` is a live `HeaderValue` starting with `Bytes`.
       let val_bytes = unsafe { read_bytes(&bucket.value) };
       if let Ok(value) = str::from_utf8(val_bytes) {
-         out.push((name, value.to_owned()));
+         out.push((name.to_owned(), value.to_owned()));
       }
    }
    out
+}
+
+unsafe fn header_name(bucket: &RawHeaderBucket) -> Option<&str> {
+   if (bucket.tag & 0xFF) == 2 {
+      return None;
+   }
+   if bucket.name.vtable.is_null() {
+      let index = bucket.name.ptr.addr() & 0xFF;
+      return STANDARD_HEADERS.get(index).copied();
+   }
+   // SAFETY: a non-null vtable means a custom header name backed by Bytes.
+   str::from_utf8(unsafe { read_bytes(&bucket.name) }).ok()
+}
+
+unsafe fn replace_content_length(map: &mut RawHeaderMap, len: usize) {
+   if map.entries_ptr.is_null() || map.entries_len == 0 || map.entries_len > 256 {
+      return;
+   }
+   let formatted = len.to_string();
+   // SAFETY: the detour has exclusive access to the request's owned buckets.
+   let buckets = unsafe { slice::from_raw_parts_mut(map.entries_ptr, map.entries_len) };
+   let mut extras = if !map.extra_ptr.is_null() && map.extra_len > 0 && map.extra_len <= 256 {
+      // SAFETY: `extra_ptr` holds `extra_len` initialized extra header values.
+      Some(unsafe { slice::from_raw_parts_mut(map.extra_ptr, map.extra_len) })
+   } else {
+      None
+   };
+   for bucket in buckets {
+      // SAFETY: the host initialized the bucket, including the value of every live name.
+      if unsafe { header_name(bucket) }
+         .is_some_and(|name| name.eq_ignore_ascii_case("content-length"))
+      {
+         if !bucket.value.vtable.is_null() {
+            let body = make_owned_bytes(formatted.as_bytes().to_vec());
+            // SAFETY: `bucket.value` is a live `RawBytes` owned by this header map.
+            unsafe { replace_bytes(&mut bucket.value, body) };
+         }
+         if (bucket.tag & 0xFF) == 1
+            && let Some(extras) = extras.as_deref_mut()
+         {
+            let mut idx = bucket.next_extra;
+            for _ in 0..extras.len() {
+               let Some(extra) = extras.get_mut(idx) else {
+                  break;
+               };
+               if !extra.value.vtable.is_null() {
+                  let body = make_owned_bytes(formatted.as_bytes().to_vec());
+                  // SAFETY: `extra.value` is a live `RawBytes` in the linked list.
+                  unsafe { replace_bytes(&mut extra.value, body) };
+               }
+               if (extra.next_tag & 0xFF) != 1 {
+                  break;
+               }
+               idx = extra.next_idx;
+            }
+         }
+      }
+   }
+}
+
+fn is_multipart_request(headers: &[(String, String)], body: &[u8]) -> bool {
+   headers.iter().any(|(name, value)| {
+      name.eq_ignore_ascii_case("content-type")
+         && value
+            .trim_start()
+            .get(..10)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("multipart/"))
+   }) || (body.starts_with(b"--") && multipart_payload(body).is_some())
 }
 
 unsafe fn send_detour(self_ptr: *const c_void, req: *mut u8) -> RawPinnedFuture {
@@ -557,21 +633,28 @@ unsafe fn send_detour(self_ptr: *const c_void, req: *mut u8) -> RawPinnedFuture 
          // SAFETY: `req` is a live owned `TransportRequest` passed by
          // `libdiscord_http`, laid out as `locate` read from `send`.
          let req_ref = unsafe { RawTransportRequest::at(req, installed.request) };
+         let tags = installed.request.body_tags;
+         let is_bytes_body =
+            req_ref.body.tag == tags.bytes || Some(req_ref.body.tag) == tags.chunked;
          // SAFETY: reading live fields of `req_ref`.
          let url = unsafe { read_str(req_ref.url) }
             .unwrap_or_default()
             .to_owned();
          let method = unsafe { read_method(req_ref.method) }.into_owned();
          let headers = unsafe { read_headers(req_ref.headers) };
-         let body = if req_ref.body.tag == 1 {
-            // SAFETY: `tag == 1` is `Body::Bytes(RawBytes)`.
+         let body = if is_bytes_body {
+            // SAFETY: both decoded byte-backed body variants start with a live Bytes.
             unsafe { read_bytes(&req_ref.body.bytes) }
          } else {
             &[]
          };
 
-         match observe(&method, &url, &headers, body) {
-            RequestAction::Pass => {},
+         let action = if is_bytes_body && is_multipart_request(&headers, body) {
+            observe_multipart(&method, &url, &headers, body)
+         } else {
+            observe(&method, &url, &headers, body)
+         };
+         match action {
             RequestAction::Drop => {
                // Zeroing `url.len` keeps the host's `String` capacity/pointer
                // intact so `Url::parse("")` fails cleanly with zero network I/O
@@ -579,20 +662,22 @@ unsafe fn send_detour(self_ptr: *const c_void, req: *mut u8) -> RawPinnedFuture 
                req_ref.url.len = 0;
                return;
             },
-            RequestAction::Replace(new_body) => {
-               if req_ref.body.tag == 1 && !req_ref.body.bytes.vtable.is_null() {
-                  let old_vtable = req_ref.body.bytes.vtable;
-                  let old_ptr = req_ref.body.bytes.ptr;
-                  let old_len = req_ref.body.bytes.len;
-                  let old_data = req_ref.body.bytes.data.load(Ordering::Relaxed);
-                  // SAFETY: drops the old `Bytes` via its own vtable.
-                  unsafe { ((*old_vtable).drop)(old_data, old_ptr, old_len) };
+            RequestAction::Replace(new_body) if installed.host_alloc.is_some() => {
+               let new_len = new_body.len();
+               if is_bytes_body && !req_ref.body.bytes.vtable.is_null() {
+                  let replacement = make_owned_bytes(new_body);
+                  // SAFETY: these variants both own the leading Bytes.
+                  unsafe { replace_bytes(&mut req_ref.body.bytes, replacement) };
+               } else if req_ref.body.tag == tags.empty {
                   req_ref.body.bytes = make_owned_bytes(new_body);
-               } else if req_ref.body.tag == 0 {
-                  req_ref.body.tag = 1;
-                  req_ref.body.bytes = make_owned_bytes(new_body);
+                  req_ref.body.tag = tags.bytes;
+               } else {
+                  return;
                }
+               // SAFETY: request headers are still exclusively owned by this call.
+               unsafe { replace_content_length(req_ref.headers, new_len) };
             },
+            RequestAction::Pass | RequestAction::Replace(_) => {},
          }
 
          if installed.responses {
@@ -741,6 +826,86 @@ fn observe(method: &str, url: &str, headers: &[(String, String)], body: &[u8]) -
    }
 }
 
+fn multipart_payload(body: &[u8]) -> Option<Range<usize>> {
+   let opening = body.get(..body.len().min(256))?;
+   let boundary_end = opening.windows(2).position(|line| line == b"\r\n")?;
+   let boundary = opening[..boundary_end].strip_prefix(b"--")?;
+   if boundary.is_empty() || !boundary.iter().all(u8::is_ascii_graphic) {
+      return None;
+   }
+   let mut marker = b"\r\n--".to_vec();
+   marker.extend_from_slice(boundary);
+   let mut start = boundary_end + 2;
+   loop {
+      let header_end = start
+         + body
+            .get(start..)?
+            .get(..(body.len() - start).min(8192))?
+            .windows(4)
+            .position(|end| end == b"\r\n\r\n")?;
+      let payload_start = header_end + 4;
+      let tail = body.get(payload_start..)?;
+      let delimiter = tail
+         .windows(marker.len())
+         .enumerate()
+         .find_map(|(offset, window)| {
+            (window == marker
+               && matches!(
+                  tail.get(offset + marker.len()..offset + marker.len() + 2),
+                  Some(b"--" | b"\r\n")
+               ))
+            .then_some(offset)
+         })?;
+      let header = String::from_utf8_lossy(body.get(start..header_end)?);
+      let is_payload = header.lines().any(|line| {
+         line.split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("content-disposition")
+               && value.split(';').skip(1).any(|field| {
+                  field.split_once('=').is_some_and(|(key, val)| {
+                     key.trim().eq_ignore_ascii_case("name")
+                        && matches!(val.trim(), "\"payload_json\"" | "payload_json")
+                  })
+               })
+         })
+      });
+      if is_payload {
+         return Some(payload_start..payload_start + delimiter);
+      }
+      let after_marker = payload_start + delimiter + marker.len();
+      if body.get(after_marker..after_marker + 2)? != b"\r\n" {
+         return None;
+      }
+      start = after_marker + 2;
+   }
+}
+
+fn observe_multipart(
+   method: &str,
+   url: &str,
+   headers: &[(String, String)],
+   body: &[u8],
+) -> RequestAction {
+   let Some(payload) = (method.eq_ignore_ascii_case("POST")
+      || method.eq_ignore_ascii_case("PATCH"))
+   .then(|| multipart_payload(body))
+   .flatten() else {
+      return match observe_request(method, url, headers, &[]) {
+         RequestAction::Drop => RequestAction::Drop,
+         _ => RequestAction::Pass,
+      };
+   };
+   match observe(method, url, headers, &body[payload.clone()]) {
+      RequestAction::Replace(json) => {
+         let mut rewritten = Vec::with_capacity(body.len() - payload.len() + json.len());
+         rewritten.extend_from_slice(&body[..payload.start]);
+         rewritten.extend_from_slice(&json);
+         rewritten.extend_from_slice(&body[payload.end..]);
+         RequestAction::Replace(rewritten)
+      },
+      action => action,
+   }
+}
+
 pub fn send(
    method: &str,
    path: &str,
@@ -808,6 +973,73 @@ mod tests {
          assert_eq!(read_bytes(&cloned), b"hello sunbird");
          ((*raw.vtable).drop)(raw.data.load(Ordering::Relaxed), raw.ptr, raw.len);
          ((*cloned.vtable).drop)(cloned.data.load(Ordering::Relaxed), cloned.ptr, cloned.len);
+      }
+   }
+
+   #[test]
+   fn multipart_payload_ignores_files_and_partial_boundary_matches() {
+      let bytes = b"--test\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"\xFFpayload_json\"\r\n\r\n\xFF\r\n--test-extra\r\n--test\r\ncontent-disposition: form-data; NAME = \"payload_json\"\r\n\r\n{\"content\":\"x\"}\r\n--test--\r\n";
+      assert_eq!(
+         &bytes[multipart_payload(bytes).unwrap()],
+         br#"{"content":"x"}"#
+      );
+      for body in [
+         b"{}".as_slice(),
+         b"--test\r\n",
+         b"--test\r\nContent-Disposition: form-data; name=payload_json\r\n\r\n{}",
+      ] {
+         assert_eq!(multipart_payload(body), None);
+      }
+   }
+
+   #[test]
+   fn replace_content_length_updates_bucket_and_extra_values() {
+      let mut extra = [RawExtraValue {
+         prev_tag: 0,
+         prev_idx: 0,
+         next_tag: 0,
+         next_idx: 0,
+         value: make_owned_bytes(b"10".to_vec()),
+         _sens: 0,
+      }];
+      let mut buckets = [RawHeaderBucket {
+         tag: 1,
+         next_extra: 0,
+         tail_extra: 0,
+         value: make_owned_bytes(b"10".to_vec()),
+         _sens: 0,
+         name: RawBytes {
+            vtable: ptr::null(),
+            ptr: ptr::without_provenance(24),
+            len: 0,
+            data: AtomicPtr::new(ptr::null_mut()),
+         },
+         _pad1: 0,
+      }];
+      let mut map = RawHeaderMap {
+         _head: [0; 3],
+         entries_cap: 1,
+         entries_ptr: buckets.as_mut_ptr(),
+         entries_len: 1,
+         extra_cap: 1,
+         extra_ptr: extra.as_mut_ptr(),
+         extra_len: 1,
+         _tail: [0; 3],
+      };
+      unsafe {
+         replace_content_length(&mut map, 42);
+         assert_eq!(read_bytes(&buckets[0].value), b"42");
+         assert_eq!(read_bytes(&extra[0].value), b"42");
+         ((*buckets[0].value.vtable).drop)(
+            buckets[0].value.data.load(Ordering::Relaxed),
+            buckets[0].value.ptr,
+            buckets[0].value.len,
+         );
+         ((*extra[0].value.vtable).drop)(
+            extra[0].value.data.load(Ordering::Relaxed),
+            extra[0].value.ptr,
+            extra[0].value.len,
+         );
       }
    }
 }

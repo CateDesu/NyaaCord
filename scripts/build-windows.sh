@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-compiles a self-contained Nyaacord Windows x86-64 executable with static MSVC CRT.
+# Cross-compiles a self-contained NyaaCord Windows x86-64 executable with static MSVC CRT.
 set -euo pipefail
 
 CALLER_PWD=$PWD
@@ -32,7 +32,7 @@ Options:
   --client <path>       Discord Phoenix Windows setup exe or directory containing Discord.exe
                         (default: DISCORD_PHOENIX_WINDOWS_SETUP or auto-detect)
   --no-client           Build a thin launcher without bundling Discord Phoenix
-  --out <path>          Output executable path (default: dist/Nyaacord-x86_64.exe)
+  --out <path>          Output executable path (default: dist/NyaaCord-x86_64.exe)
   --skip-plugins        Skip esbuild plugin bundling (embed an empty plugin map)
   -h, --help            Show this help message
 EOF
@@ -121,7 +121,7 @@ version=${NYAACORD_VERSION:-}
 client=${DISCORD_PHOENIX_WINDOWS_SETUP:-}
 client_explicit=0
 no_client=0
-out="$ROOT/dist/Nyaacord-x86_64.exe"
+out="$ROOT/dist/NyaaCord-x86_64.exe"
 skip_plugins=0
 
 while [ "$#" -gt 0 ]; do
@@ -450,7 +450,7 @@ if [ "$no_client" = 1 ]; then
    expect_client=0
 fi
 
-echo "Building phoenix-inject (Nyaacord-x86_64.exe, version $version)..."
+echo "Building phoenix-inject (NyaaCord-x86_64.exe, version $version)..."
 (
    cd "$ROOT"
    XWIN_SDK_VERSION="$xwin_sdk_ver" \
@@ -636,10 +636,10 @@ def inspect_pe(path: str, expect_dll: bool, expect_resources: bool, expected_ver
             f"{path}: unexpected FILEVERSION/PRODUCTVERSION {fv}/{pv}, expected {want_tuple}"
         )
         expected_strings = {
-            "FileDescription": "Nyaacord",
-            "ProductName": "Nyaacord",
-            "InternalName": "Nyaacord",
-            "OriginalFilename": "Nyaacord.exe",
+            "FileDescription": "NyaaCord",
+            "ProductName": "NyaaCord",
+            "InternalName": "NyaaCord",
+            "OriginalFilename": "NyaaCord.exe",
             "FileVersion": expected_version,
             "ProductVersion": expected_version,
         }
@@ -684,7 +684,7 @@ if [ "$no_client" = 0 ]; then
    python3 - "$bundled_discord_exe" <<'PY'
 import array, struct, sys
 
-NEW_BRAND = "Nyaacord"
+NEW_BRAND = "NyaaCord"
 TARGET_KEYS = ("FileDescription", "ProductName")
 ALLOWED_ORIG = {"Discord Phoenix", "Discord", NEW_BRAND}
 

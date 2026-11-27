@@ -2,12 +2,12 @@
 //!
 //! Keeps `StatusNotifierItem::id` and `desktop-entry` as
 //! `com.discord.libdiscord` while updating visible tray labels, titles, and
-//! tooltips to `Nyaacord`.
+//! tooltips to `NyaaCord`.
 
 use phoenix_hook::image::Image;
 use phoenix_sigs::desktop;
 
-const BRAND: &str = "Nyaacord";
+const BRAND: &str = "NyaaCord";
 
 /// Rebrands Desktop Phoenix's native tray strings and hooks before its own
 /// threads start.

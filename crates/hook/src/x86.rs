@@ -7,37 +7,21 @@ use std::ops::Range;
 
 pub use iced_x86::Register;
 #[cfg(windows)]
-use iced_x86::{
-   BlockEncoder,
-   BlockEncoderOptions,
-   FlowControl,
-   InstructionBlock,
-};
-use iced_x86::{
-   Decoder,
-   DecoderOptions,
-   Formatter as _,
-   Instruction,
-   IntelFormatter,
-};
+use iced_x86::{BlockEncoder, BlockEncoderOptions, FlowControl, InstructionBlock};
+use iced_x86::{Decoder, DecoderOptions, Formatter as _, Instruction, IntelFormatter};
 
 use crate::image::Image;
 #[cfg(windows)]
 use crate::{
    Error,
-   image::{
-      ABSOLUTE_JUMP_LEN,
-      absolute_jump,
-      alloc_exec,
-      win32,
-   },
+   image::{ABSOLUTE_JUMP_LEN, absolute_jump, alloc_exec, win32},
 };
 
 /// One decoded instruction.
 pub struct Line {
-   pub addr:   usize,
-   pub len:    usize,
-   pub text:   String,
+   pub addr: usize,
+   pub len: usize,
+   pub text: String,
    /// The address a RIP-relative operand or a near branch points at.
    pub target: Option<usize>,
 }
@@ -132,16 +116,14 @@ impl Abi {
    pub const fn arg_regs(self) -> &'static [Register] {
       match self {
          Self::Win64 => &[Register::RCX, Register::RDX, Register::R8, Register::R9],
-         Self::SysV => {
-            &[
-               Register::RDI,
-               Register::RSI,
-               Register::RDX,
-               Register::RCX,
-               Register::R8,
-               Register::R9,
-            ]
-         },
+         Self::SysV => &[
+            Register::RDI,
+            Register::RSI,
+            Register::RDX,
+            Register::RCX,
+            Register::R8,
+            Register::R9,
+         ],
       }
    }
 
@@ -178,30 +160,26 @@ impl Abi {
    #[must_use]
    pub const fn volatile(self) -> &'static [Register] {
       match self {
-         Self::Win64 => {
-            &[
-               Register::RAX,
-               Register::RCX,
-               Register::RDX,
-               Register::R8,
-               Register::R9,
-               Register::R10,
-               Register::R11,
-            ]
-         },
-         Self::SysV => {
-            &[
-               Register::RAX,
-               Register::RCX,
-               Register::RDX,
-               Register::RSI,
-               Register::RDI,
-               Register::R8,
-               Register::R9,
-               Register::R10,
-               Register::R11,
-            ]
-         },
+         Self::Win64 => &[
+            Register::RAX,
+            Register::RCX,
+            Register::RDX,
+            Register::R8,
+            Register::R9,
+            Register::R10,
+            Register::R11,
+         ],
+         Self::SysV => &[
+            Register::RAX,
+            Register::RCX,
+            Register::RDX,
+            Register::RSI,
+            Register::RDI,
+            Register::R8,
+            Register::R9,
+            Register::R10,
+            Register::R11,
+         ],
       }
    }
 }
@@ -216,10 +194,7 @@ struct Constants {
 impl Constants {
    /// The constant `instruction` writes to its first operand.
    fn loaded(&mut self, instruction: &Instruction) -> Option<u64> {
-      use iced_x86::{
-         Mnemonic,
-         OpKind,
-      };
+      use iced_x86::{Mnemonic, OpKind};
       let immediate = |operand: u32| {
          matches!(
             instruction.op_kind(operand),
@@ -253,20 +228,14 @@ impl Constants {
 /// The `(offset, size)` stores a function makes through its hidden return
 /// pointer, the first argument register on entry.
 ///
-/// Decoding stops at the first `ret`, and a `memcpy` into the pointer counts
-/// as one store of the copied length. It shows how large the returned
+/// Decoding stops at the first `ret`. A `memcpy` or `rep movsb` into the
+/// pointer counts as one store of the copied length. It shows how large the returned
 /// struct is and which fields the constructor sets, so a layout baked into a
 /// caller can be checked against a new build. Control flow is followed
 /// linearly, which suits the straight-line constructors it is for.
 #[must_use]
 pub fn sret_stores(abi: Abi, code: &[u8], ip: usize) -> Vec<(usize, usize)> {
-   use iced_x86::{
-      Code,
-      InstructionInfoFactory,
-      Mnemonic,
-      OpAccess,
-      OpKind,
-   };
+   use iced_x86::{Code, InstructionInfoFactory, Mnemonic, OpAccess, OpKind};
 
    let writes = |access: OpAccess| {
       matches!(
@@ -280,13 +249,18 @@ pub fn sret_stores(abi: Abi, code: &[u8], ip: usize) -> Vec<(usize, usize)> {
    let mut factory = InstructionInfoFactory::new();
    let mut constants = Constants::default();
    let mut holders = vec![dest];
+   let mut spills = Vec::new();
    let mut len_imm = None;
+   let mut rep_count = None;
    let mut stores = Vec::new();
    while decoder.can_decode() {
       let instruction = decoder.decode();
       if instruction.is_invalid() || instruction.mnemonic() == Mnemonic::Ret {
          break;
       }
+      let constant = constants
+         .loaded(&instruction)
+         .and_then(|value| usize::try_from(value).ok());
       if instruction.mnemonic() == Mnemonic::Call {
          if holders.contains(&dest)
             && let Some(len) = len_imm
@@ -295,22 +269,45 @@ pub fn sret_stores(abi: Abi, code: &[u8], ip: usize) -> Vec<(usize, usize)> {
          }
          holders.retain(|register| !abi.volatile().contains(register));
          len_imm = None;
+         rep_count = None;
          continue;
       }
-      let constant = constants.loaded(&instruction);
       let info = factory.info(&instruction);
-      for memory in info.used_memory() {
-         if writes(memory.access())
-            && holders.contains(&memory.base())
-            && memory.index() == Register::None
+      if instruction.code() == Code::Movsb_m8_m8 && instruction.has_rep_prefix() {
+         if holders.contains(&Register::RDI)
+            && instruction.op0_kind() == OpKind::MemoryESRDI
+            && let Some(count) = rep_count
          {
-            stores.push((addr(memory.displacement()), memory.memory_size().size()));
+            stores.push((0, count));
          }
+      } else {
+         for memory in info.used_memory() {
+            if writes(memory.access())
+               && holders.contains(&memory.base())
+               && memory.index() == Register::None
+               && let Ok(offset) = usize::try_from(memory.displacement().cast_signed())
+            {
+               stores.push((offset, memory.memory_size().size()));
+            }
+         }
+      }
+      let stack_slot = |operand| {
+         based(&instruction, operand)
+            .filter(|(base, _)| matches!(base, Register::RBP | Register::RSP))
+      };
+      if instruction.code() == Code::Mov_rm64_r64
+         && holders.contains(&instruction.op1_register())
+         && let Some(slot) = stack_slot(0)
+         && !spills.contains(&slot)
+      {
+         // Branches can spill the same argument before reusing its register.
+         spills.push(slot);
       }
       let copied = matches!(instruction.code(), Code::Mov_r64_rm64 | Code::Mov_rm64_r64)
          && instruction.op0_kind() == OpKind::Register
-         && instruction.op1_kind() == OpKind::Register
-         && holders.contains(&instruction.op1_register());
+         && ((instruction.op1_kind() == OpKind::Register
+            && holders.contains(&instruction.op1_register()))
+            || stack_slot(1).is_some_and(|slot| spills.contains(&slot)));
       let written = info
          .used_registers()
          .iter()
@@ -323,7 +320,11 @@ pub fn sret_stores(abi: Abi, code: &[u8], ip: usize) -> Vec<(usize, usize)> {
             holders.push(register);
          }
          if register == len {
-            len_imm = constant.and_then(|value| usize::try_from(value).ok());
+            len_imm = constant;
+         }
+         if register == Register::RCX {
+            rep_count = constant
+               .filter(|_| matches!(instruction.op0_register(), Register::ECX | Register::RCX));
          }
       }
    }
@@ -349,11 +350,7 @@ impl ArgHolders {
    /// Drops the registers `instruction` overwrites, keeps a `mov` copy, and
    /// forgets the volatile ones across a call.
    fn after(&mut self, abi: Abi, instruction: &Instruction, written: &[Register]) {
-      use iced_x86::{
-         Code,
-         Mnemonic,
-         OpKind,
-      };
+      use iced_x86::{Code, Mnemonic, OpKind};
       if instruction.mnemonic() == Mnemonic::Call {
          self
             .holders
@@ -411,11 +408,7 @@ fn based(instruction: &Instruction, operand: u32) -> Option<(Register, usize)> {
 /// checked against a new build.
 #[must_use]
 pub fn arg_accesses(abi: Abi, code: &[u8], ip: usize, index: usize) -> Vec<(usize, usize)> {
-   use iced_x86::{
-      InstructionInfoFactory,
-      Mnemonic,
-      OpAccess,
-   };
+   use iced_x86::{InstructionInfoFactory, Mnemonic, OpAccess};
 
    let mut decoder = Decoder::with_ip(64, code, ip as u64, DecoderOptions::NONE);
    let mut factory = InstructionInfoFactory::new();
@@ -454,11 +447,7 @@ pub fn arg_accesses(abi: Abi, code: &[u8], ip: usize, index: usize) -> Vec<(usiz
 pub fn arg_jump_tables(abi: Abi, code: &[u8], ip: usize, index: usize) -> Vec<(usize, usize)> {
    use std::collections::HashMap;
 
-   use iced_x86::{
-      InstructionInfoFactory,
-      Mnemonic,
-      OpKind,
-   };
+   use iced_x86::{InstructionInfoFactory, Mnemonic, OpKind};
 
    let mut decoder = Decoder::with_ip(64, code, ip as u64, DecoderOptions::NONE);
    let mut factory = InstructionInfoFactory::new();
@@ -565,11 +554,7 @@ pub struct FieldCall {
 pub fn arg_field_calls(abi: Abi, code: &[u8], ip: usize, index: usize) -> Vec<FieldCall> {
    use std::collections::HashMap;
 
-   use iced_x86::{
-      InstructionInfoFactory,
-      Mnemonic,
-      OpKind,
-   };
+   use iced_x86::{InstructionInfoFactory, Mnemonic, OpKind};
 
    let mut decoder = Decoder::with_ip(64, code, ip as u64, DecoderOptions::NONE);
    let mut factory = InstructionInfoFactory::new();
@@ -647,12 +632,12 @@ pub fn arg_field_calls(abi: Abi, code: &[u8], ip: usize, index: usize) -> Vec<Fi
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DebugField {
    /// Address and length of the field name literal.
-   pub name:     usize,
+   pub name: usize,
    pub name_len: usize,
    /// Offset of the field in `self`.
-   pub offset:   usize,
+   pub offset: usize,
    /// The `&dyn Debug` vtable passed for the field, whose slot 3 is its `fmt`.
-   pub vtable:   Option<usize>,
+   pub vtable: Option<usize>,
 }
 
 /// The fields a derived `Debug::fmt` prints, in code order.
@@ -667,11 +652,7 @@ pub struct DebugField {
 pub fn debug_fields(abi: Abi, code: &[u8], ip: usize) -> Vec<DebugField> {
    use std::collections::HashMap;
 
-   use iced_x86::{
-      Code,
-      Mnemonic,
-      OpKind,
-   };
+   use iced_x86::{Code, Mnemonic, OpKind};
 
    #[derive(Clone, Copy)]
    enum Value {
@@ -784,21 +765,19 @@ pub fn debug_fields(abi: Abi, code: &[u8], ip: usize) -> Vec<DebugField> {
             };
          },
          (Mnemonic::Call, _) => {
-            let arg = |index: usize| {
-               match abi.arg_slot(index) {
-                  Slot::Reg(register) => regs.get(&register),
-                  Slot::Stack(offset) => stack.get(&offset),
-               }
+            let arg = |index: usize| match abi.arg_slot(index) {
+               Slot::Reg(register) => regs.get(&register),
+               Slot::Stack(offset) => stack.get(&offset),
             };
             if let (Some(Value::Rip(name)), Some(Value::Imm(len)), Some(Value::Field(offset))) =
                (arg(1), arg(2), arg(3))
                && (1..64).contains(len)
             {
                fields.push(DebugField {
-                  name:     *name,
+                  name: *name,
                   name_len: addr(*len),
-                  offset:   *offset,
-                  vtable:   match arg(4) {
+                  offset: *offset,
+                  vtable: match arg(4) {
                      Some(Value::Rip(at)) => Some(*at),
                      _ => None,
                   },
@@ -835,11 +814,7 @@ pub fn sret_byte_stores(
 ) -> Vec<(usize, u8)> {
    use std::collections::HashMap;
 
-   use iced_x86::{
-      FlowControl,
-      Mnemonic,
-      OpKind,
-   };
+   use iced_x86::{FlowControl, Mnemonic, OpKind};
 
    let mut out = None;
    let mut decoder = Decoder::with_ip(64, before, before_ip as u64, DecoderOptions::NONE);
@@ -940,7 +915,7 @@ pub fn jump_target(image: &Image<'_>, code: &[u8], ip: usize) -> Option<usize> {
 /// An instruction that points at an address, and the function holding it.
 pub struct CodeRef {
    pub function: usize,
-   pub line:     Line,
+   pub line: Line,
 }
 
 /// The instructions in `image` whose RIP-relative operand or near branch
@@ -1009,11 +984,11 @@ pub fn read_memory(addr: usize, len: usize) -> Option<Vec<u8>> {
    let mut buffer = vec![0u8; len];
    let local = libc::iovec {
       iov_base: buffer.as_mut_ptr().cast(),
-      iov_len:  len,
+      iov_len: len,
    };
    let remote = libc::iovec {
       iov_base: addr as *mut c_void,
-      iov_len:  len,
+      iov_len: len,
    };
    // SAFETY: `buffer` holds `len` writable bytes, and process_vm_readv checks
    // the source range instead of faulting.
@@ -1029,8 +1004,8 @@ pub fn read_memory(addr: usize, len: usize) -> Option<Vec<u8>> {
 #[cfg(windows)]
 #[repr(C)]
 pub struct Regs {
-   pub r9:  u64,
-   pub r8:  u64,
+   pub r9: u64,
+   pub r8: u64,
    pub rdx: u64,
    pub rcx: u64,
    /// The caller's return address.
@@ -1054,7 +1029,7 @@ pub type Observer = extern "C" fn(ctx: usize, regs: &Regs);
 /// A function [`observe`] redirects through its stub.
 #[cfg(windows)]
 pub struct Observed {
-   addr:     usize,
+   addr: usize,
    original: [u8; ABSOLUTE_JUMP_LEN],
 }
 
@@ -1101,12 +1076,10 @@ pub unsafe fn observe(
    observer: Observer,
    ctx: usize,
 ) -> Result<Observed, Error> {
-   let refuse = |message: &str| {
-      Error::Attach {
-         backend: "observe",
-         target:  addr,
-         message: message.to_owned(),
-      }
+   let refuse = |message: &str| Error::Attach {
+      backend: "observe",
+      target: addr,
+      message: message.to_owned(),
    };
    if addr % 8 == 7 {
       return Err(refuse(
@@ -1253,12 +1226,29 @@ mod tests {
          0xC3, // ret
          0x48, 0x89, 0x01, // mov [rcx], rax: past the ret
       ];
-      assert_eq!(sret_stores(Abi::Win64, &code, 0x1000), [
-         (0x323, 1),
-         (0x80, 8),
-         (8, 8),
-         (0, 0x40)
-      ]);
+      assert_eq!(
+         sret_stores(Abi::Win64, &code, 0x1000),
+         [(0x323, 1), (0x80, 8), (8, 8), (0, 0x40)]
+      );
+   }
+
+   #[test]
+   fn sret_stores_count_repeated_bytes_only_through_the_return_pointer() {
+      let code = [
+         0x48, 0x89, 0xCB, // mov rbx, rcx
+         0x48, 0x89, 0x5D, 0x08, // mov [rbp+8], rbx
+         0x31, 0xDB, // xor ebx, ebx
+         0xB9, 0x10, 0x01, 0x00, 0x00, // mov ecx, 0x110
+         0xF3, 0xA4, // rep movsb to an unrelated rdi
+         0xE8, 0x00, 0x00, 0x00, 0x00, // call
+         0x48, 0x8B, 0x5D, 0x08, // mov rbx, [rbp+8]
+         0x48, 0x89, 0xDF, // mov rdi, rbx
+         0xB9, 0x80, 0x00, 0x00, 0x00, // mov ecx, 0x80
+         0xF3, 0xA4, // rep movsb to the return pointer
+         0xF3, 0xA4, // repeat after the count and destination changed
+         0xC3, // ret
+      ];
+      assert_eq!(sret_stores(Abi::Win64, &code, 0x1000), [(0, 0x80)]);
    }
 
    #[test]
@@ -1273,10 +1263,10 @@ mod tests {
          0xC3, // ret
          0x8B, 0x43, 0x08, // mov eax, [rbx+8]: past the ret
       ];
-      assert_eq!(arg_accesses(Abi::SysV, &code, 0x1000, 1), [
-         (0xD0, 4),
-         (0x162, 1)
-      ]);
+      assert_eq!(
+         arg_accesses(Abi::SysV, &code, 0x1000, 1),
+         [(0xD0, 4), (0x162, 1)]
+      );
    }
 
    #[test]
@@ -1289,9 +1279,10 @@ mod tests {
          0x4C, 0x01, 0xF8, // add rax, r15
          0xFF, 0xE0, // jmp rax
       ];
-      assert_eq!(arg_jump_tables(Abi::SysV, &code, 0x1000, 1), [(
-         0x78, 0x110A
-      )]);
+      assert_eq!(
+         arg_jump_tables(Abi::SysV, &code, 0x1000, 1),
+         [(0x78, 0x110A)]
+      );
    }
 
    #[test]
@@ -1307,15 +1298,18 @@ mod tests {
          0xE8, 0x00, 0x00, 0x00, 0x00, // call
          0xE8, 0x00, 0x00, 0x00, 0x00, // call: rdx and rcx are gone
       ];
-      assert_eq!(arg_field_calls(Abi::SysV, &code, 0x1000, 1), [FieldCall {
-         site: 0x1000 + 39,
-         args: [
-            None,
-            None,
-            Some(FieldArg::Copy(0xF8)),
-            Some(FieldArg::Field(0xB0))
-         ],
-      }]);
+      assert_eq!(
+         arg_field_calls(Abi::SysV, &code, 0x1000, 1),
+         [FieldCall {
+            site: 0x1000 + 39,
+            args: [
+               None,
+               None,
+               Some(FieldArg::Copy(0xF8)),
+               Some(FieldArg::Field(0xB0))
+            ],
+         }]
+      );
    }
 
    #[test]
@@ -1331,12 +1325,15 @@ mod tests {
          0x8D, 0x05, 0x06, 0x51, 0x5C, 0x04, 0x48, 0x8D, 0x7C, 0x24, 0x08, 0xBA, 0x07, 0x00, 0x00,
          0x00, 0xFF, 0x15, 0x6E, 0xAD, 0x9E, 0x04,
       ];
-      assert_eq!(debug_fields(Abi::SysV, &code, 0x1546_E250), [DebugField {
-         name:     0x485_EF18,
-         name_len: 7,
-         offset:   0x277,
-         vtable:   Some(0x19A3_3398),
-      }]);
+      assert_eq!(
+         debug_fields(Abi::SysV, &code, 0x1546_E250),
+         [DebugField {
+            name: 0x485_EF18,
+            name_len: 7,
+            offset: 0x277,
+            vtable: Some(0x19A3_3398),
+         }]
+      );
       assert_eq!(debug_fields(Abi::Win64, &code, 0x1546_E250), []);
    }
 
@@ -1353,24 +1350,24 @@ mod tests {
          .into_iter()
          .map(|line| line.text)
          .collect::<Vec<_>>();
-      assert_eq!(text[..6], [
-         "push rcx",
-         "push rdx",
-         "push r8",
-         "push r9",
-         "sub rsp,68h",
-         "movdqu [rsp+20h],xmm0"
-      ]);
+      assert_eq!(
+         text[..6],
+         [
+            "push rcx",
+            "push rdx",
+            "push r8",
+            "push r9",
+            "sub rsp,68h",
+            "movdqu [rsp+20h],xmm0"
+         ]
+      );
       assert!(text.contains(&"lea rdx,[rsp+68h]".to_owned()));
       assert!(text.contains(&"mov rcx,7".to_owned()));
       assert!(text.contains(&"call rax".to_owned()));
-      assert_eq!(text[text.len() - 6..text.len() - 1], [
-         "add rsp,68h",
-         "pop r9",
-         "pop r8",
-         "pop rdx",
-         "pop rcx"
-      ]);
+      assert_eq!(
+         text[text.len() - 6..text.len() - 1],
+         ["add rsp,68h", "pop r9", "pop r8", "pop rdx", "pop rcx"]
+      );
       assert!(
          text
             .last()

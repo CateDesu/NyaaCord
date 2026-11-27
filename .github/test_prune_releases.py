@@ -78,7 +78,7 @@ def sample_releases() -> list[dict]:
 
 
 class PruneFixture:
-    def __init__(self, fault: str = "", pretty: bool = False) -> None:
+    def __init__(self, fault: str = "", pretty: bool = False, keep_tag: str = "v0.2.0") -> None:
         self.fault = fault
         self.pretty = pretty
         self.temp = tempfile.TemporaryDirectory(prefix="nyaacord-prune-test-")
@@ -87,7 +87,7 @@ class PruneFixture:
         self.commands: list[list[str]] = []
         self.downloaded = False
 
-        payload = make_appimage_bytes("v0.2.0")
+        payload = make_appimage_bytes(keep_tag)
         sums = f"{hashlib.sha256(payload).hexdigest()}  {prune_mod.APPIMAGE_ASSET}\n".encode("utf-8")
         self.files = {
             prune_mod.APPIMAGE_ASSET: payload,
@@ -238,7 +238,7 @@ class PruneReleasesTests(unittest.TestCase):
         fixture = PruneFixture()
         self.addCleanup(fixture.cleanup)
         prev = os.environ.get("GITHUB_REPOSITORY")
-        os.environ["GITHUB_REPOSITORY"] = "ForkOwner/Nyaacord"
+        os.environ["GITHUB_REPOSITORY"] = "ForkOwner/NyaaCord"
         try:
             result = prune_mod.prune_releases(dry_run=True, local_dir=fixture.dir, execute=fixture.execute)
         finally:
@@ -250,23 +250,20 @@ class PruneReleasesTests(unittest.TestCase):
             result,
             {"kept": "v0.2.0", "wouldRemove": ["v0.0.9", "v0.1.0"], "removed": [], "tagsRetained": True},
         )
-        self.assertIn("repos/ForkOwner/Nyaacord/releases?per_page=100", fixture.commands[0])
+        self.assertIn("repos/ForkOwner/NyaaCord/releases?per_page=100", fixture.commands[0])
         self.assertEqual(sum("DELETE" in cmd for cmd in fixture.commands), 0)
 
-    def test_prunes_legacy_v021_asset_when_v022_is_newest(self) -> None:
-        rows = [
-            make_release(10, "v0.2.1", appimage_asset=prune_mod.LEGACY_APPIMAGE_ASSET),
-            make_release(11, "v0.2.2", appimage_asset=prune_mod.APPIMAGE_ASSET),
-        ]
-        plan = prune_mod.retention_plan(rows)
-        self.assertEqual(plan["keep"]["tag_name"], "v0.2.2")
-        self.assertEqual([r["tag_name"] for r in plan["remove"]], ["v0.2.1"])
-
-        legacy_only = [
-            make_release(10, "v0.2.1", appimage_asset=prune_mod.LEGACY_APPIMAGE_ASSET),
-        ]
+    def test_prunes_legacy_v022_asset_only_on_older_releases(self) -> None:
+        old = make_release(10, "v0.2.2", appimage_asset="Nyaacord-x86_64.AppImage")
+        newest = make_release(11, "v0.2.2.1", appimage_asset="NyaaCord-x86_64.AppImage")
+        fixture = PruneFixture(keep_tag=newest["tag_name"])
+        self.addCleanup(fixture.cleanup)
+        fixture.rows = [old, newest]
+        result = prune_mod.prune_releases(local_dir=fixture.dir, execute=fixture.execute)
+        self.assertEqual(result["removed"], ["v0.2.2"])
+        self.assertEqual(fixture.rows, [newest])
         with self.assertRaisesRegex(ValueError, "required"):
-            prune_mod.retention_plan(legacy_only)
+            prune_mod.retention_plan([old])
 
     def test_cli_handles_large_paginated_pretty_and_compact_stream(self) -> None:
         fixture = PruneFixture()

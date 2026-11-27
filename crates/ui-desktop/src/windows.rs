@@ -293,7 +293,7 @@ fn os_err(context: &str) -> Error {
    }
 }
 
-/// Builds the `Nyaacord` fox ARGB icon for the Windows system tray, falling back
+/// Builds the `NyaaCord` fox ARGB icon for the Windows system tray, falling back
 /// to `IDI_APPLICATION` if decoding or GDI allocation fails.
 unsafe fn create_sunbird_icon() -> *mut c_void {
    let fallback = || {
@@ -403,7 +403,7 @@ unsafe fn add_tray_icon(hwnd: *mut c_void, icon: *mut c_void) -> bool {
    nid.h_icon = icon;
    fill_wide(
       &mut nid.sz_tip,
-      "Nyaacord. Click or press Ctrl+Shift+U for Settings",
+      "NyaaCord. Click or press Ctrl+Shift+U for Settings",
    );
    // SAFETY: `hwnd` and `icon` are live Win32 handles on the tray thread.
    unsafe { Shell_NotifyIconW(NIM_ADD, &raw mut nid) != 0 }
@@ -421,7 +421,7 @@ fn start_tray() {
 
 fn run_tray_loop() {
    let class_name = wide("SunbirdTrayWindow");
-   let title = wide("Nyaacord");
+   let title = wide("NyaaCord");
    let taskbar_msg_name = wide("TaskbarCreated");
    // SAFETY: Win32 hidden message window, hotkey, and tray registration on
    // dedicated thread.
@@ -598,7 +598,7 @@ unsafe extern "system" fn tray_wnd_proc(
                unsafe {
                   let menu = CreatePopupMenu();
                   if !menu.is_null() {
-                     let open_lbl = wide("Open Nyaacord Settings\tCtrl+Shift+U");
+                     let open_lbl = wide("Open NyaaCord Settings\tCtrl+Shift+U");
                      let devtools_lbl = wide("Open DevTools (Console)\tCtrl+Shift+I");
                      let reload_lbl = wide("Reload All Plugins");
                      let update_lbl = wide("Check for Updates");
@@ -732,7 +732,7 @@ fn pick_js_path() -> Option<PathBuf> {
    let filter: Vec<u16> = "JavaScript Plugins (*.js)\0*.js\0All Files (*.*)\0*.*\0\0"
       .encode_utf16()
       .collect();
-   let title = wide("Install Nyaacord Plugin (.js)");
+   let title = wide("Install NyaaCord Plugin (.js)");
    let def_ext = wide("js");
    #[expect(
       clippy::cast_possible_truncation,

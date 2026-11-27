@@ -115,7 +115,7 @@ impl Library {
    }
 }
 
-/// `Nyaacord`'s plugin runtime: the loader, the libraries it needs and the
+/// `NyaaCord`'s plugin runtime: the loader, the libraries it needs and the
 /// plugins to bundle, by name.
 pub struct Runtime {
    pub libraries: Vec<Library>,

@@ -1809,7 +1809,7 @@ fn build_overlay(window: *mut c_void, app: *mut c_void) -> Option<RawDiv> {
                (
                   "Install Plugin from URL".to_owned(),
                   Some(
-                     "Paste an https:// URL pointing to a Nyaacord .js plugin bundle.".to_owned(),
+                     "Paste an https:// URL pointing to a NyaaCord .js plugin bundle.".to_owned(),
                   ),
                )
             },

@@ -274,14 +274,14 @@ fn check_up_to_date_and_available_via_asset_digest() {
 
    let mut routes = HashMap::new();
    let listener_server = MockServer::start(HashMap::new());
-   let dummy_url = listener_server.url("/dl/Nyaacord-x86_64.AppImage");
+   let dummy_url = listener_server.url("/dl/NyaaCord-x86_64.AppImage");
    let release_json = serde_json::json!({
       "tag_name": "v0.2.0",
       "draft": false,
       "html_url": "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0",
       "assets": [
          {
-            "name": "Nyaacord-x86_64.AppImage",
+            "name": "NyaaCord-x86_64.AppImage",
             "browser_download_url": dummy_url,
             "size": v2_bytes.len(),
             "digest": format!("sha256:{v2_sha}")
@@ -309,7 +309,7 @@ fn check_up_to_date_and_available_via_asset_digest() {
       CheckResult::Available(info) => {
          assert_eq!(info.version, "0.2.0");
          assert_eq!(info.tag_name, "v0.2.0");
-         assert_eq!(info.asset_name, "Nyaacord-x86_64.AppImage");
+         assert_eq!(info.asset_name, "NyaaCord-x86_64.AppImage");
          assert_eq!(info.sha256, v2_sha);
          assert_eq!(info.size, v2_bytes.len() as u64);
       },
@@ -325,7 +325,7 @@ fn check_available_via_sha256sums_fallback() {
    let v2_bytes = build_fake_appimage(b"sums-fallback", 0);
    let v2_sha = sha256_bytes(&v2_bytes);
 
-   let sums_body = format!("{v2_sha}  Nyaacord-x86_64.AppImage\n");
+   let sums_body = format!("{v2_sha}  NyaaCord-x86_64.AppImage\n");
    let mut sums_routes = HashMap::new();
    sums_routes.insert(
       "/SHA256SUMS.txt".to_owned(),
@@ -339,7 +339,7 @@ fn check_available_via_sha256sums_fallback() {
       "html_url": "https://github.com/CateDesu/NyaaCord/releases/tag/v0.3.0",
       "assets": [
          {
-            "name": "Nyaacord-x86_64.AppImage",
+            "name": "NyaaCord-x86_64.AppImage",
             "browser_download_url": sums_server.url("/asset.AppImage"),
             "size": v2_bytes.len()
          },
@@ -384,8 +384,8 @@ fn check_rejects_draft_and_missing_checksum() {
       "html_url": "https://github.com/CateDesu/NyaaCord/releases/tag/v9.0.0",
       "assets": [
          {
-            "name": "Nyaacord-x86_64.AppImage",
-            "browser_download_url": "https://github.com/CateDesu/NyaaCord/releases/download/v9.0.0/Nyaacord-x86_64.AppImage",
+            "name": "NyaaCord-x86_64.AppImage",
+            "browser_download_url": "https://github.com/CateDesu/NyaaCord/releases/download/v9.0.0/NyaaCord-x86_64.AppImage",
             "size": 1024
          }
       ]
@@ -461,7 +461,7 @@ fn verifies_fake_appimage_and_rejects_bad_images() {
 #[test]
 fn atomic_upgrade_through_redirect_creates_previous_and_rolls_back() {
    let dir = TempDir::new("upgrade");
-   let target = dir.path().join("Nyaacord-x86_64.AppImage");
+   let target = dir.path().join("NyaaCord-x86_64.AppImage");
    let v1 = build_fake_appimage(b"version-1-image", 0);
    let v2 = build_fake_appimage(b"version-2-image-longer-payload", 0);
    let v2_sha = sha256_bytes(&v2);
@@ -488,7 +488,7 @@ fn atomic_upgrade_through_redirect_creates_previous_and_rolls_back() {
    let release = ReleaseInfo {
       version: "0.2.0".to_owned(),
       tag_name: "v0.2.0".to_owned(),
-      asset_name: "Nyaacord-x86_64.AppImage".to_owned(),
+      asset_name: "NyaaCord-x86_64.AppImage".to_owned(),
       download_url: redirect_server.url("/download/v2.AppImage"),
       size: v2.len() as u64,
       sha256: v2_sha,
@@ -530,7 +530,7 @@ fn atomic_upgrade_through_redirect_creates_previous_and_rolls_back() {
 #[test]
 fn corrupt_download_fails_without_touching_target() {
    let dir = TempDir::new("corrupt");
-   let target = dir.path().join("Nyaacord-x86_64.AppImage");
+   let target = dir.path().join("NyaaCord-x86_64.AppImage");
    let v1 = build_fake_appimage(b"original-v1", 0);
    fs::write(&target, &v1).expect("write v1");
 
@@ -553,7 +553,7 @@ fn corrupt_download_fails_without_touching_target() {
    let bad_hash_release = ReleaseInfo {
       version: "0.2.0".to_owned(),
       tag_name: "v0.2.0".to_owned(),
-      asset_name: "Nyaacord-x86_64.AppImage".to_owned(),
+      asset_name: "NyaaCord-x86_64.AppImage".to_owned(),
       download_url: server.url("/v2"),
       size: v2.len() as u64,
       sha256: "f".repeat(64),
@@ -568,7 +568,7 @@ fn corrupt_download_fails_without_touching_target() {
    let bad_image_release = ReleaseInfo {
       version: "0.2.0".to_owned(),
       tag_name: "v0.2.0".to_owned(),
-      asset_name: "Nyaacord-x86_64.AppImage".to_owned(),
+      asset_name: "NyaaCord-x86_64.AppImage".to_owned(),
       download_url: server.url("/junk"),
       size: junk.len() as u64,
       sha256: junk_sha,
@@ -584,7 +584,7 @@ fn corrupt_download_fails_without_touching_target() {
       .expect("read dir")
       .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
       .collect();
-   assert_eq!(entries, vec!["Nyaacord-x86_64.AppImage".to_owned()]);
+   assert_eq!(entries, vec!["NyaaCord-x86_64.AppImage".to_owned()]);
 }
 
 #[test]
@@ -604,27 +604,27 @@ fn non_writable_and_mount_targets_fail_before_download() {
    let release = ReleaseInfo {
       version: "0.2.0".to_owned(),
       tag_name: "v0.2.0".to_owned(),
-      asset_name: "Nyaacord-x86_64.AppImage".to_owned(),
+      asset_name: "NyaaCord-x86_64.AppImage".to_owned(),
       download_url: server.url("/asset"),
       size: v2.len() as u64,
       sha256: v2_sha,
       release_url: "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0".to_owned(),
    };
 
-   let mount_target = Path::new("/tmp/.mount_NyaacordTest/Nyaacord-x86_64.AppImage");
+   let mount_target = Path::new("/tmp/.mount_NyaaCordTest/NyaaCord-x86_64.AppImage");
    let err = apply_update(&release, mount_target, &cfg, &mut |_, _| {})
       .expect_err("mount path must be refused");
    assert!(matches!(err, Error::MountPath { .. }));
    assert_eq!(server.hits("/asset"), 0);
 
-   let custom_tmpdir_mount = Path::new("/home/cate/.t3/tmp/.mount_NyaacordTest/Nyaacord.AppImage");
+   let custom_tmpdir_mount = Path::new("/home/cate/.t3/tmp/.mount_NyaaCordTest/NyaaCord.AppImage");
    let err = apply_update(&release, custom_tmpdir_mount, &cfg, &mut |_, _| {})
       .expect_err("custom TMPDIR mount path must be refused");
    assert!(matches!(err, Error::MountPath { .. }));
    assert_eq!(server.hits("/asset"), 0);
 
    fs::set_permissions(dir.path(), Permissions::from_mode(0o555)).expect("chmod 0555");
-   let ro_target = dir.path().join("Nyaacord-x86_64.AppImage");
+   let ro_target = dir.path().join("NyaaCord-x86_64.AppImage");
    let err = apply_update(&release, &ro_target, &cfg, &mut |_, _| {})
       .expect_err("read only dir must be refused");
    let _ = fs::set_permissions(dir.path(), Permissions::from_mode(0o755));
@@ -760,7 +760,7 @@ fn apply_update_handles_symlinks_and_stale_pid_temp_files() {
    fs::create_dir_all(&real_dir).expect("create real dir");
    fs::create_dir_all(&link_dir).expect("create link dir");
 
-   let real_target = real_dir.join("Nyaacord-x86_64.AppImage");
+   let real_target = real_dir.join("NyaaCord-x86_64.AppImage");
    let symlink_target = link_dir.join("nyaacord");
    let v1 = build_fake_appimage(b"symlink-v1", 0);
    let v2 = build_fake_appimage(b"symlink-v2", 0);
@@ -770,8 +770,8 @@ fn apply_update_handles_symlinks_and_stale_pid_temp_files() {
 
    // Pre-populate stale PID-named files to verify unique naming ignores them.
    let pid = std::process::id();
-   let stale_new = real_dir.join(format!(".Nyaacord-x86_64.AppImage.new.{pid}"));
-   let stale_prev = real_dir.join(format!(".Nyaacord-x86_64.AppImage.prev.{pid}"));
+   let stale_new = real_dir.join(format!(".NyaaCord-x86_64.AppImage.new.{pid}"));
+   let stale_prev = real_dir.join(format!(".NyaaCord-x86_64.AppImage.prev.{pid}"));
    fs::write(&stale_new, b"stale").expect("write stale new");
    fs::write(&stale_prev, b"stale").expect("write stale prev");
 
@@ -784,7 +784,7 @@ fn apply_update_handles_symlinks_and_stale_pid_temp_files() {
    let release = ReleaseInfo {
       version: "0.2.0".to_owned(),
       tag_name: "v0.2.0".to_owned(),
-      asset_name: "Nyaacord-x86_64.AppImage".to_owned(),
+      asset_name: "NyaaCord-x86_64.AppImage".to_owned(),
       download_url: server.url("/v2"),
       size: v2.len() as u64,
       sha256: v2_sha,
@@ -822,7 +822,7 @@ fn apply_update_handles_symlinks_and_stale_pid_temp_files() {
 #[test]
 fn relaunch_watchdog_rolls_back_crashing_target() {
    let dir = TempDir::new("watchdog");
-   let target = dir.path().join("Nyaacord-x86_64.AppImage");
+   let target = dir.path().join("NyaaCord-x86_64.AppImage");
    let prev = previous_path(&target);
    let v1_good = build_fake_appimage(b"watchdog-good-v1", 0);
    let v2_crash = build_fake_appimage(b"watchdog-crash-v2", 1);
@@ -860,7 +860,7 @@ fn relaunch_watchdog_rolls_back_crashing_target() {
 fn cli_check_update_verify_and_rollback_end_to_end() {
    let bin = env!("CARGO_BIN_EXE_nyaacord-updater");
    let dir = TempDir::new("cli");
-   let target = dir.path().join("Nyaacord-x86_64.AppImage");
+   let target = dir.path().join("NyaaCord-x86_64.AppImage");
    let v1 = build_fake_appimage(b"cli-v1", 0);
    let v2 = build_fake_appimage(b"cli-v2", 0);
    let v2_sha = sha256_bytes(&v2);
@@ -879,7 +879,7 @@ fn cli_check_update_verify_and_rollback_end_to_end() {
       "html_url": "https://github.com/CateDesu/NyaaCord/releases/tag/v0.2.0",
       "assets": [
          {
-            "name": "Nyaacord-x86_64.AppImage",
+            "name": "NyaaCord-x86_64.AppImage",
             "browser_download_url": asset_server.url("/v2.AppImage"),
             "size": v2.len(),
             "digest": format!("sha256:{v2_sha}")
@@ -950,7 +950,7 @@ fn cli_check_update_verify_and_rollback_end_to_end() {
    // Verify bare relative filename works without searching PATH.
    let rel_verify = Command::new(bin)
       .current_dir(dir.path())
-      .args(["verify", "--file", "Nyaacord-x86_64.AppImage"])
+      .args(["verify", "--file", "NyaaCord-x86_64.AppImage"])
       .output()
       .expect("run relative verify");
    assert!(rel_verify.status.success(), "{rel_verify:?}");

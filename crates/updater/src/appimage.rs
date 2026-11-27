@@ -925,9 +925,9 @@ while [ "$j" -lt 8 ]; do
                fi
                if command -v notify-send >/dev/null 2>&1; then
                   if [ -f "$DIR/nyaacord.png" ]; then
-                     notify-send --app-name=Nyaacord --hint=string:desktop-entry:com.discord.libdiscord -i "$DIR/nyaacord.png" -- "Nyaacord update rolled back" "The updated AppImage exited early and the previous version was restored." >/dev/null 2>&1 || true
+                     notify-send --app-name=NyaaCord --hint=string:desktop-entry:com.discord.libdiscord -i "$DIR/nyaacord.png" -- "NyaaCord update rolled back" "The updated AppImage exited early and the previous version was restored." >/dev/null 2>&1 || true
                   else
-                     notify-send --app-name=Nyaacord --hint=string:desktop-entry:com.discord.libdiscord -- "Nyaacord update rolled back" "The updated AppImage exited early and the previous version was restored." >/dev/null 2>&1 || true
+                     notify-send --app-name=NyaaCord --hint=string:desktop-entry:com.discord.libdiscord -- "NyaaCord update rolled back" "The updated AppImage exited early and the previous version was restored." >/dev/null 2>&1 || true
                   fi
                fi
                NYAACORD_AUTO_UPDATE=0 "$TARGET" </dev/null >/dev/null 2>&1 &
@@ -1000,10 +1000,10 @@ mod tests {
 
    #[test]
    fn previous_path_appends_suffix() {
-      let p = Path::new("/opt/Nyaacord-x86_64.AppImage");
+      let p = Path::new("/opt/NyaaCord-x86_64.AppImage");
       assert_eq!(
          previous_path(p),
-         PathBuf::from("/opt/Nyaacord-x86_64.AppImage.previous")
+         PathBuf::from("/opt/NyaaCord-x86_64.AppImage.previous")
       );
    }
 
@@ -1019,11 +1019,11 @@ mod tests {
          &appdirs
       ));
       assert!(is_mount_path_with_appdirs(
-         Path::new("/home/cate/.t3/tmp/.mount_NyaaCo9999/Nyaacord.AppImage"),
+         Path::new("/home/cate/.t3/tmp/.mount_NyaaCo9999/NyaaCord.AppImage"),
          &appdirs
       ));
       assert!(is_mount_path_with_appdirs(
-         Path::new("/custom/extracted_appdir/Nyaacord.AppImage"),
+         Path::new("/custom/extracted_appdir/NyaaCord.AppImage"),
          &appdirs
       ));
       assert!(!is_mount_path_with_appdirs(
@@ -1031,7 +1031,7 @@ mod tests {
          &appdirs
       ));
       assert!(!is_mount_path_with_appdirs(
-         Path::new("/home/cate/Apps/Nyaacord.AppImage"),
+         Path::new("/home/cate/Apps/NyaaCord.AppImage"),
          &appdirs
       ));
    }
@@ -1048,8 +1048,8 @@ mod tests {
    #[test]
    fn watchdog_script_uses_discord_desktop_entry_hint() {
       let script = build_watchdog_script(
-         "'/tmp/Nyaacord.AppImage'",
-         "'/tmp/Nyaacord.AppImage.previous'",
+         "'/tmp/NyaaCord.AppImage'",
+         "'/tmp/NyaaCord.AppImage.previous'",
          "'/tmp/nyaacord-updater'",
          42,
       );

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds a self-contained Nyaacord Linux x86-64 AppImage from a base Discord Phoenix AppImage.
+# Builds a self-contained NyaaCord Linux x86-64 AppImage from a base Discord Phoenix AppImage.
 set -euo pipefail
 
 CALLER_PWD=$PWD
@@ -29,7 +29,7 @@ Usage: scripts/build-appimage.sh [options]
 Options:
   --version <ver>       Version to embed (default: NYAACORD_VERSION or Cargo.toml workspace version)
   --client <path>       Base Discord Phoenix AppImage (default: DISCORD_PHOENIX_APPIMAGE or auto-detect)
-  --out <path>          Output AppImage path (default: dist/Nyaacord-x86_64.AppImage)
+  --out <path>          Output AppImage path (default: dist/NyaaCord-x86_64.AppImage)
   --comp <gzip|zstd>    SquashFS compression algorithm (default: gzip)
   --skip-cargo          Reuse existing target/release/libphoenix.so and target/release/nyaacord-updater
   -h, --help            Show this help message
@@ -165,7 +165,7 @@ find_esbuild() {
 
 version=${NYAACORD_VERSION:-}
 client=${DISCORD_PHOENIX_APPIMAGE:-}
-out="$ROOT/dist/Nyaacord-x86_64.AppImage"
+out="$ROOT/dist/NyaaCord-x86_64.AppImage"
 comp="gzip"
 skip_cargo=0
 
@@ -473,9 +473,9 @@ mkdir -p "$APPDIR/usr/share/applications"
 cat > "$APPDIR/com.discord.libdiscord.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Nyaacord
+Name=NyaaCord
 GenericName=Internet Messenger
-Comment=Nyaacord for Discord Phoenix
+Comment=NyaaCord for Discord Phoenix
 Exec=nyaacord %U
 Icon=com.discord.libdiscord
 StartupWMClass=com.discord.libdiscord
@@ -484,6 +484,7 @@ MimeType=x-scheme-handler/discord;
 StartupNotify=true
 Terminal=false
 X-AppImage-Version=$version
+X-NyaaCord-Managed=true
 EOF
 cp "$APPDIR/com.discord.libdiscord.desktop" "$APPDIR/usr/share/applications/com.discord.libdiscord.desktop"
 
@@ -505,21 +506,21 @@ export NYAACORD_REPO="${NYAACORD_REPO:-CateDesu/NyaaCord}"
 
 usage() {
    cat <<'USAGE'
-Usage: Nyaacord-x86_64.AppImage [options] [-- Discord arguments]
+Usage: NyaaCord-x86_64.AppImage [options] [-- Discord arguments]
 
 Options:
-  --check-update        Check GitHub Releases for a newer Nyaacord AppImage
+  --check-update        Check GitHub Releases for a newer NyaaCord AppImage
   --update              Download and replace this AppImage with the latest release
   --rollback            Restore the previous AppImage backup
   --no-runtime          Launch with only the access gate opened
-  --version             Print Nyaacord version
+  --version             Print NyaaCord version
   --help                Show this help message
 USAGE
 }
 
 case "${1:-}" in
    --version)
-      printf 'Nyaacord %s\n' "$version"
+      printf 'NyaaCord %s\n' "$version"
       exit 0
       ;;
    --help|-h)
@@ -690,8 +691,8 @@ mv -f "$out.tmp" "$out"
 
 "$updater_bin" verify --file "$out"
 built_version=$("$out" --version)
-if [ "$built_version" != "Nyaacord $version" ]; then
-   echo "Built AppImage version check failed: got '$built_version', expected 'Nyaacord $version'" >&2
+if [ "$built_version" != "NyaaCord $version" ]; then
+   echo "Built AppImage version check failed: got '$built_version', expected 'NyaaCord $version'" >&2
    exit 1
 fi
 

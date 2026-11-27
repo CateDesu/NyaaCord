@@ -1,6 +1,6 @@
 [package]
 name = "phoenix-updater"
-description = "GitHub Releases AppImage updater for Nyaacord"
+description = "GitHub Releases AppImage updater for NyaaCord"
 edition.workspace = true
 license.workspace = true
 version.workspace = true

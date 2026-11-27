@@ -3,15 +3,9 @@
 
 use std::borrow::Cow;
 
-use phoenix_hook::{
-   image::Image,
-   pattern::Pattern,
-};
+use phoenix_hook::{image::Image, pattern::Pattern};
 
-use crate::{
-   Found,
-   one,
-};
+use crate::{Found, one};
 
 /// The host's call into the guest, which takes `{data, vtable}` and calls
 /// `vtable[dispatch](data, bytes, len, out)`: `mov x19, x3; ldp x8, x9, [x0];
@@ -40,12 +34,12 @@ pub const HOST_CALL: usize = 0x18;
 
 /// The two vtables between the Swift host and the Rust guest.
 pub struct Bridge {
-   pub call:        usize,
+   pub call: usize,
    /// The guest's, which the host calls every view and host event through.
-   pub vtable:      usize,
+   pub vtable: usize,
    /// Offset of `dispatch` in `vtable`, 0x20 on 357.0, after drop, size,
    /// align and one method.
-   pub dispatch:    usize,
+   pub dispatch: usize,
    /// The host callbacks', which the guest makes every host call through.
    pub host_vtable: usize,
 }
@@ -169,11 +163,9 @@ pub fn host_names(image: &Image<'_>, names: &[&str]) -> Vec<Option<u16>> {
    }
    seen
       .into_iter()
-      .map(|seen| {
-         match seen {
-            Seen::Once(number) => Some(number),
-            Seen::Not | Seen::Conflict => None,
-         }
+      .map(|seen| match seen {
+         Seen::Once(number) => Some(number),
+         Seen::Not | Seen::Conflict => None,
       })
       .collect()
 }
@@ -258,11 +250,9 @@ pub fn switch_entrypoint(bundle: &[u8]) -> Found<SwitchEntrypoint> {
 pub fn access_gate(image: &Image<'_>) -> Found<[usize; 2]> {
    match image.scan(ACCESS_GATE)[..] {
       [a, b] => Ok([a - 8, b - 8]),
-      ref hits => {
-         Err(format!(
-            "access gate: expected 2 evaluators, found {}",
-            hits.len()
-         ))
-      },
+      ref hits => Err(format!(
+         "access gate: expected 2 evaluators, found {}",
+         hits.len()
+      )),
    }
 }

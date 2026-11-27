@@ -30,7 +30,7 @@ except (ValueError, ImportError):
     gi.require_version("AppIndicator3", "0.1")
     from gi.repository import AppIndicator3 as AI
 tray = AI.Indicator.new("sunbird", sys.argv[1], AI.IndicatorCategory.APPLICATION_STATUS)
-tray.set_title("Nyaacord")
+tray.set_title("NyaaCord")
 menu = Gtk.Menu()
 for at, label in enumerate(sys.argv[2:]):
     item = Gtk.MenuItem(label=label) if label else Gtk.SeparatorMenuItem()
@@ -120,14 +120,14 @@ impl DesktopHost for Host {
       let mut zenity = Command::new("zenity");
       zenity.args([
          "--file-selection",
-         "--title=Install Nyaacord Plugin (.js)",
+         "--title=Install NyaaCord Plugin (.js)",
          "--file-filter=JavaScript Plugins | *.js",
          "--file-filter=All Files | *",
       ]);
       let mut kdialog = Command::new("kdialog");
       kdialog.args([
          "--title",
-         "Install Nyaacord Plugin (.js)",
+         "Install NyaaCord Plugin (.js)",
          "--getopenfilename",
          ".",
          "*.js|JavaScript Plugins",
@@ -158,7 +158,7 @@ impl DesktopHost for Host {
       STARTED.call_once(|| {
          if let Err(err) = start_indicator() {
             log::info!(
-               "tray: {err}, Nyaacord Settings is at {}",
+               "tray: {err}, NyaaCord Settings is at {}",
                config().map_or("", |config| &config.dashboard_url)
             );
          }
@@ -170,7 +170,7 @@ const DESKTOP_ENTRY_HINT: &str = "--hint=string:desktop-entry:com.discord.libdis
 
 fn notify_command(title: &str, body: &str, icon: Option<&Path>) -> Command {
    let mut send = Command::new("notify-send");
-   send.args(["--app-name=Nyaacord", DESKTOP_ENTRY_HINT]);
+   send.args(["--app-name=NyaaCord", DESKTOP_ENTRY_HINT]);
    if let Some(icon) = icon {
       let mut arg = OsString::from("--icon=");
       arg.push(icon);
@@ -201,7 +201,7 @@ fn nyaacord_icon_path() -> Option<PathBuf> {
    path.is_file().then(|| path.canonicalize().unwrap_or(path))
 }
 
-/// `Nyaacord`'s icon, then Discord's icon from its `AppImage` or package, else its icon name.
+/// `NyaaCord`'s icon, then Discord's icon from its `AppImage` or package, else its icon name.
 fn icon() -> OsString {
    if let Some(path) = nyaacord_icon_path() {
       return path.into_os_string();
@@ -256,7 +256,7 @@ fn start_indicator() -> Result<(), Error> {
          drop(stdin);
          if child.wait().is_ok_and(|status| !status.success()) {
             log::info!(
-               "tray: needs python3 with GTK 3 and AppIndicator bindings; Nyaacord Settings is at \
+               "tray: needs python3 with GTK 3 and AppIndicator bindings; NyaaCord Settings is at \
                 {}",
                config().map_or("", |config| &config.dashboard_url)
             );
@@ -280,7 +280,7 @@ mod tests {
       assert_eq!(
          args,
          vec![
-            "--app-name=Nyaacord",
+            "--app-name=NyaaCord",
             "--hint=string:desktop-entry:com.discord.libdiscord",
             "--icon=/tmp/nyaacord.png",
             "--",
@@ -294,7 +294,7 @@ mod tests {
       assert_eq!(
          args,
          vec![
-            "--app-name=Nyaacord",
+            "--app-name=NyaaCord",
             "--hint=string:desktop-entry:com.discord.libdiscord",
             "--",
             "Title",

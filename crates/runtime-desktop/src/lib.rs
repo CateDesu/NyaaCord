@@ -1,5 +1,5 @@
 //! phoenix on Desktop Phoenix: the access gate, the HTTP transport hooks, the
-//! `Nyaacord` pages in User Settings, message accessories and the tray.
+//! `NyaaCord` pages in User Settings, message accessories and the tray.
 
 #![cfg(any(windows, all(target_os = "linux", target_arch = "x86_64")))]
 
@@ -19,6 +19,7 @@ mod settings;
 mod staff;
 mod tray;
 mod typing;
+mod window_title;
 
 use std::{
    ffi::c_void,
@@ -81,6 +82,8 @@ pub fn prepare() -> Result<(), Error> {
    phoenix_runtime::set_platform(&Desktop);
    let image = phoenix_runtime::target()?;
    open_access_gate(&image);
+   #[cfg(target_os = "linux")]
+   tune_pipewire(&image);
    staff::prepare(&image);
    settings::install(&image);
    modal::install(&image);
@@ -97,6 +100,7 @@ pub fn prepare() -> Result<(), Error> {
       discord::install(&image);
       accessories::install_optimistic_delete(&image);
    }
+   window_title::install(&image);
    tray::install(&image);
    // The index is tens of MB and nothing reads it after startup.
    phoenix_sigs::desktop::release_call_index();
@@ -104,8 +108,30 @@ pub fn prepare() -> Result<(), Error> {
    Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn tune_pipewire(image: &Image<'static>) {
+   let buffer = match phoenix_sigs::desktop::pipewire_buffer(image) {
+      Ok(buffer) => buffer,
+      Err(err) => {
+         log::warn!("PipeWire render buffer: {err}");
+         return;
+      },
+   };
+   // 30 ms at 48 kHz covers a 1024-frame PipeWire quantum.
+   // SAFETY: the locator verified both instructions before Discord runs.
+   let result = unsafe {
+      image
+         .write_code(buffer.target, &1440_u32.to_le_bytes())
+         .and_then(|()| image.write_code(buffer.shrink, &[0x31, 0xC0, 0xC3]))
+   };
+   match result {
+      Ok(()) => log::info!("PipeWire render buffer: 1440 frames, initial shrink disabled"),
+      Err(err) => log::warn!("PipeWire render buffer: {err}"),
+   }
+}
+
 /// Opens the access gate and hooks nothing else, so Discord runs as it would
-/// without `Nyaacord`. For telling Discord's own behaviour from ours.
+/// without `NyaaCord`. For telling Discord's own behaviour from ours.
 pub fn open_gate_only() -> Result<(), Error> {
    phoenix_runtime::set_platform(&Desktop);
    open_access_gate(&phoenix_runtime::target()?);
@@ -240,7 +266,7 @@ impl Platform for Desktop {
          on_check_updates: Some(Arc::new(phoenix_runtime::update::check_now)),
       });
       phoenix_ui_desktop::notify(
-         "Nyaacord ready",
+         "NyaaCord ready",
          Some("Open Sunbird in User Settings for plugins, or press Ctrl+Shift+I for DevTools"),
       );
       phoenix_runtime::update::check();
@@ -259,7 +285,7 @@ impl Platform for Desktop {
          Notice::UpdateAvailable(update) => {
             let mut parts = Vec::new();
             if let Some(version) = &update.loader {
-               parts.push(format!("Nyaacord v{version} is available"));
+               parts.push(format!("NyaaCord v{version} is available"));
             }
             if !update.plugins.is_empty() {
                parts.push(format!("plugins: {}", update.plugins.join(", ")));
@@ -269,7 +295,7 @@ impl Platform for Desktop {
             } else {
                parts.join(" · ")
             };
-            phoenix_ui_desktop::notify("Nyaacord updates available", Some(&body));
+            phoenix_ui_desktop::notify("NyaaCord updates available", Some(&body));
          },
          Notice::PluginsUpdated(names) if !names.is_empty() => {
             let body = format!("Reloaded: {}", names.join(", "));
@@ -325,11 +351,11 @@ impl Platform for Desktop {
             {
                let ver = outcome.version;
                phoenix_runtime::update::finish(Some(format!(
-                  "Updated to Nyaacord v{ver}. Restart Nyaacord to apply."
+                  "Updated to NyaaCord v{ver}. Restart NyaaCord to apply."
                )));
                phoenix_ui_desktop::notify(
-                  "Nyaacord updated",
-                  Some(&format!("Updated to v{ver}. Restart Nyaacord to apply.")),
+                  "NyaaCord updated",
+                  Some(&format!("Updated to v{ver}. Restart NyaaCord to apply.")),
                );
             }
 
@@ -340,11 +366,11 @@ impl Platform for Desktop {
                if no_relaunch {
                   let ver = outcome.version;
                   phoenix_runtime::update::finish(Some(format!(
-                     "Updated to Nyaacord v{ver}. Restart Nyaacord to apply."
+                     "Updated to NyaaCord v{ver}. Restart NyaaCord to apply."
                   )));
                   phoenix_ui_desktop::notify(
-                     "Nyaacord updated",
-                     Some(&format!("Updated to v{ver}. Restart Nyaacord to apply.")),
+                     "NyaaCord updated",
+                     Some(&format!("Updated to v{ver}. Restart NyaaCord to apply.")),
                   );
                   return;
                }
@@ -356,10 +382,10 @@ impl Platform for Desktop {
                   Ok(()) => {
                      let ver = outcome.version;
                      phoenix_runtime::update::finish(Some(format!(
-                        "Updated to Nyaacord v{ver}. Restarting..."
+                        "Updated to NyaaCord v{ver}. Restarting..."
                      )));
                      phoenix_ui_desktop::notify(
-                        "Nyaacord updated",
+                        "NyaaCord updated",
                         Some(&format!("Updated to v{ver}. Restarting...")),
                      );
                      std::thread::spawn(|| {
@@ -377,11 +403,11 @@ impl Platform for Desktop {
                      log::warn!("relaunch watchdog: {err}");
                      let ver = outcome.version;
                      phoenix_runtime::update::finish(Some(format!(
-                        "Updated to Nyaacord v{ver}. Restart Nyaacord to apply."
+                        "Updated to NyaaCord v{ver}. Restart NyaaCord to apply."
                      )));
                      phoenix_ui_desktop::notify(
-                        "Nyaacord updated",
-                        Some(&format!("Updated to v{ver}. Restart Nyaacord to apply.")),
+                        "NyaaCord updated",
+                        Some(&format!("Updated to v{ver}. Restart NyaaCord to apply.")),
                      );
                   },
                }
@@ -465,7 +491,7 @@ fn dialog(body: &[u8], sheet: bool) -> remote::Reply {
          },
       );
    }
-   let title = request.title.unwrap_or_else(|| "Nyaacord".to_owned());
+   let title = request.title.unwrap_or_else(|| "NyaaCord".to_owned());
    let index = modal::ask(title, content, options, Duration::from_mins(2));
    remote::ok_json(&DialogAnswer { index })
 }
@@ -515,7 +541,7 @@ fn resolve_target_appimage(
       return Some(path);
    }
    let dir = sunbird_dir?;
-   let candidate = dir.join("Nyaacord-x86_64.AppImage");
+   let candidate = dir.join("NyaaCord-x86_64.AppImage");
    if (candidate.exists() || dir.is_dir()) && !phoenix_updater::is_mount_path(&candidate) {
       return Some(candidate);
    }
@@ -563,8 +589,8 @@ fn resolve_target_windows_exe(
       return Some(path);
    }
    let base = local_app_data.filter(|dir| !dir.as_os_str().is_empty())?;
-   let dir = base.join("Nyaacord");
-   let exe = dir.join("Nyaacord.exe");
+   let dir = base.join("NyaaCord");
+   let exe = dir.join("NyaaCord.exe");
    if dir_exists(&exe) || dir_exists(&dir) {
       return Some(exe);
    }
@@ -612,7 +638,7 @@ fn run_package_update(
    } else {
       release.version.as_str()
    };
-   phoenix_runtime::update::set_status(Some(format!("Downloading Nyaacord v{display_version}...")));
+   phoenix_runtime::update::set_status(Some(format!("Downloading NyaaCord v{display_version}...")));
    let mut last_pct: Option<u64> = None;
    let mut last_mb: u64 = 0;
    let mut on_progress = |downloaded: u64, total: Option<u64>| {
@@ -628,7 +654,7 @@ fn run_package_update(
          if last_pct.is_none_or(|prev| pct >= prev + 5 || (pct == 100 && prev != 100)) {
             last_pct = Some(pct);
             phoenix_runtime::update::set_status(Some(format!(
-               "Downloading Nyaacord v{display_version} ({pct}%)..."
+               "Downloading NyaaCord v{display_version} ({pct}%)..."
             )));
          }
       } else {
@@ -636,7 +662,7 @@ fn run_package_update(
          if mb >= last_mb + 5 {
             last_mb = mb;
             phoenix_runtime::update::set_status(Some(format!(
-               "Downloading Nyaacord v{display_version} ({mb} MiB)..."
+               "Downloading NyaaCord v{display_version} ({mb} MiB)..."
             )));
          }
       }
@@ -652,23 +678,23 @@ mod tests {
    #[test]
    fn detects_appimage_mount_paths() {
       assert!(phoenix_updater::is_mount_path(Path::new(
-         "/tmp/.mount_Nyaacord1234/AppRun"
+         "/tmp/.mount_NyaaCord1234/AppRun"
       )));
       assert!(phoenix_updater::is_mount_path(Path::new(
-         "/home/cate/.t3/tmp/.mount_Nyaacord1234/AppRun"
+         "/home/cate/.t3/tmp/.mount_NyaaCord1234/AppRun"
       )));
       assert!(phoenix_updater::is_mount_path(Path::new("/tmp/.mount_abc")));
       assert!(!phoenix_updater::is_mount_path(Path::new(
-         "/home/cate/.local/share/sunbird/Nyaacord-x86_64.AppImage"
+         "/home/cate/.local/share/sunbird/NyaaCord-x86_64.AppImage"
       )));
       assert!(!phoenix_updater::is_mount_path(Path::new(
-         "/tmp/nyaacord-test/Nyaacord-x86_64.AppImage"
+         "/tmp/nyaacord-test/NyaaCord-x86_64.AppImage"
       )));
    }
 
    #[test]
    fn resolves_target_appimage_without_touching_base_discord() {
-      let managed = PathBuf::from("/home/cate/.local/share/sunbird/Nyaacord-x86_64.AppImage");
+      let managed = PathBuf::from("/home/cate/.local/share/sunbird/NyaaCord-x86_64.AppImage");
       let discord = PathBuf::from("/home/cate/Applications/discord-phoenix.AppImage");
       let custom = PathBuf::from("/home/cate/Apps/custom-chat.AppImage");
 
@@ -684,7 +710,7 @@ mod tests {
          None
       );
 
-      // Standalone renamed Nyaacord AppImage with NYAACORD_APPDIR is accepted.
+      // Standalone renamed NyaaCord AppImage with NYAACORD_APPDIR is accepted.
       assert_eq!(
          resolve_target_appimage(None, Some(custom.clone()), true, None),
          Some(custom)
@@ -704,7 +730,7 @@ mod tests {
 
    #[test]
    fn resolves_target_windows_exe_paths() {
-      let explicit = PathBuf::from(r"D:\Portable\Nyaacord-x86_64.exe");
+      let explicit = PathBuf::from(r"D:\Portable\NyaaCord-x86_64.exe");
       let local = PathBuf::from(r"C:\Users\cate\AppData\Local");
 
       assert_eq!(
@@ -713,9 +739,9 @@ mod tests {
       );
       assert_eq!(
          resolve_target_windows_exe(None, Some(local.clone()), |path| {
-            path == local.join("Nyaacord")
+            path == local.join("NyaaCord")
          }),
-         Some(local.join("Nyaacord").join("Nyaacord.exe"))
+         Some(local.join("NyaaCord").join("NyaaCord.exe"))
       );
       assert_eq!(
          resolve_target_windows_exe(None, Some(local), |_| false),

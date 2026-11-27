@@ -1,59 +1,25 @@
 //! ELF files viewed the way the dynamic linker maps them, for offline tools.
 
-use std::{
-   borrow::Cow,
-   num::TryFromIntError,
-};
+use std::{borrow::Cow, num::TryFromIntError};
 
 use object::{
-   Endianness,
-   LittleEndian,
-   Object,
-   elf::{
-      self,
-      FileHeader32,
-      FileHeader64,
-   },
-   macho::{
-      self,
-      MachHeader64,
-   },
+   Endianness, LittleEndian, Object,
+   elf::{self, FileHeader32, FileHeader64},
+   macho::{self, MachHeader64},
    pe::{
-      self,
-      IMAGE_DIRECTORY_ENTRY_EXCEPTION,
-      IMAGE_FILE_MACHINE_AMD64,
-      IMAGE_SCN_MEM_EXECUTE,
-      IMAGE_SCN_MEM_READ,
-      IMAGE_SCN_MEM_WRITE,
+      self, IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_FILE_MACHINE_AMD64, IMAGE_SCN_MEM_EXECUTE,
+      IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE,
    },
    read::{
-      elf::{
-         FileHeader,
-         ProgramHeader,
-         SectionHeader,
-         SectionTable,
-      },
+      elf::{FileHeader, ProgramHeader, SectionHeader, SectionTable},
       macho::{
-         FatArch as _,
-         Fixup,
-         LoadCommandVariant,
-         MachHeader,
-         MachOFatFile32,
-         Section as _,
+         FatArch as _, Fixup, LoadCommandVariant, MachHeader, MachOFatFile32, Section as _,
          Segment as _,
       },
-      pe::{
-         ImageNtHeaders,
-         ImageOptionalHeader,
-         PeFile64,
-      },
+      pe::{ImageNtHeaders, ImageOptionalHeader, PeFile64},
    },
 };
-use phoenix_hook::image::{
-   BuildId,
-   Image,
-   Segment,
-};
+use phoenix_hook::image::{BuildId, Image, Segment};
 
 /// `PT_ARM_EXIDX`, the ARM unwind table segment. The `object` crate exposes no
 /// constant for it.
@@ -65,7 +31,7 @@ pub enum FileError {
    NotElf { path: String },
    #[error("{path}: {source}")]
    Parse {
-      path:   String,
+      path: String,
       #[source]
       source: object::Error,
    },
@@ -78,13 +44,10 @@ pub enum FileError {
    #[error("{path}: relocation at {offset:#x} outside every segment")]
    Relocation { path: String, offset: usize },
    #[error("{path}: {message}")]
-   Packed {
-      path:    String,
-      message: &'static str,
-   },
+   Packed { path: String, message: &'static str },
    #[error("{path}: address does not fit in usize")]
    Address {
-      path:   String,
+      path: String,
       #[source]
       source: TryFromIntError,
    },
@@ -100,18 +63,18 @@ pub enum Machine {
 /// A `PT_LOAD` segment's place in the file.
 #[derive(Clone, Copy, Debug)]
 struct FileLoad {
-   vaddr:  usize,
+   vaddr: usize,
    offset: usize,
-   size:   usize,
+   size: usize,
 }
 
 pub struct ElfFile<'a> {
    /// Segments at their link addresses with `R_*_RELATIVE` relocations applied,
    /// from `.rela.dyn` plain or Android APS2-packed. RELR and REL keep the
    /// addend in place, which with a zero load base is already the final value.
-   pub image:   Image<'a>,
+   pub image: Image<'a>,
    pub machine: Machine,
-   loads:       Vec<FileLoad>,
+   loads: Vec<FileLoad>,
 }
 
 impl<'a> ElfFile<'a> {
@@ -119,11 +82,9 @@ impl<'a> ElfFile<'a> {
       match data.get(4) {
          Some(2) => Self::build::<FileHeader64<Endianness>>(path, data),
          Some(1) => Self::build::<FileHeader32<Endianness>>(path, data),
-         _ => {
-            Err(FileError::NotElf {
-               path: path.to_owned(),
-            })
-         },
+         _ => Err(FileError::NotElf {
+            path: path.to_owned(),
+         }),
       }
    }
 
@@ -132,22 +93,16 @@ impl<'a> ElfFile<'a> {
       Elf: FileHeader<Endian = Endianness>,
       Elf::Word: Into<u64>,
    {
-      let parse = |source| {
-         FileError::Parse {
-            path: path.to_owned(),
-            source,
-         }
+      let parse = |source| FileError::Parse {
+         path: path.to_owned(),
+         source,
       };
-      let truncated = || {
-         FileError::Truncated {
-            path: path.to_owned(),
-         }
+      let truncated = || FileError::Truncated {
+         path: path.to_owned(),
       };
-      let address = |source| {
-         FileError::Address {
-            path: path.to_owned(),
-            source,
-         }
+      let address = |source| FileError::Address {
+         path: path.to_owned(),
+         source,
       };
 
       let header = Elf::parse(data).map_err(parse)?;
@@ -160,7 +115,7 @@ impl<'a> ElfFile<'a> {
          elf::EM_ARM => (Machine::Arm, 4, None),
          other => {
             return Err(FileError::Machine {
-               path:    path.to_owned(),
+               path: path.to_owned(),
                machine: other.0,
             });
          },
@@ -184,10 +139,10 @@ impl<'a> ElfFile<'a> {
          match segment.p_type(endian) {
             elf::PT_LOAD => {
                image.segments.push(Segment {
-                  addr:       vaddr,
-                  bytes:      mapped(bytes, segment.p_memsz(endian).into()).map_err(address)?,
+                  addr: vaddr,
+                  bytes: mapped(bytes, segment.p_memsz(endian).into()).map_err(address)?,
                   executable: flags.0 & elf::PF_X.0 != 0,
-                  writable:   flags.0 & elf::PF_W.0 != 0,
+                  writable: flags.0 & elf::PF_W.0 != 0,
                });
                loads.push(FileLoad {
                   vaddr,
@@ -237,7 +192,7 @@ pub struct MachOFile<'a> {
    pub image: Image<'a>,
    /// `(vmaddr, file offset, size)` per instruction section, to map a link
    /// address back to its byte in the file.
-   code:      Vec<(usize, usize, usize)>,
+   code: Vec<(usize, usize, usize)>,
 }
 
 impl MachOFile<'_> {
@@ -256,22 +211,16 @@ impl<'a> MachOFile<'a> {
       reason = "one pass over the load commands, then one over the fixup chains"
    )]
    pub fn parse(path: &str, data: &'a [u8]) -> Result<Self, FileError> {
-      let parse = |source| {
-         FileError::Parse {
-            path: path.to_owned(),
-            source,
-         }
+      let parse = |source| FileError::Parse {
+         path: path.to_owned(),
+         source,
       };
-      let truncated = || {
-         FileError::Truncated {
-            path: path.to_owned(),
-         }
+      let truncated = || FileError::Truncated {
+         path: path.to_owned(),
       };
-      let address = |source| {
-         FileError::Address {
-            path: path.to_owned(),
-            source,
-         }
+      let address = |source| FileError::Address {
+         path: path.to_owned(),
+         source,
       };
 
       let header = MachHeader64::<Endianness>::parse(data, 0).map_err(parse)?;
@@ -279,17 +228,17 @@ impl<'a> MachOFile<'a> {
       let cputype = header.cputype(endian);
       if cputype != macho::CPU_TYPE_ARM64 {
          return Err(FileError::CpuType {
-            path:    path.to_owned(),
+            path: path.to_owned(),
             cputype: cputype.0,
          });
       }
       let mut image = Image {
-         path:          path.to_owned(),
-         build_id:      None,
-         segments:      Vec::new(),
-         eh_frame_hdr:  None,
-         arm_exidx:     None,
-         pdata:         None,
+         path: path.to_owned(),
+         build_id: None,
+         segments: Vec::new(),
+         eh_frame_hdr: None,
+         arm_exidx: None,
+         pdata: None,
          pointer_width: 8,
       };
 
@@ -340,10 +289,10 @@ impl<'a> MachOFile<'a> {
                let initprot = segment.initprot(endian).0;
                by_index.push(Some((image.segments.len(), bytes)));
                image.segments.push(Segment {
-                  addr:       usize::try_from(vmaddr).map_err(address)?,
-                  bytes:      Cow::Owned(owned),
+                  addr: usize::try_from(vmaddr).map_err(address)?,
+                  bytes: Cow::Owned(owned),
                   executable: initprot & macho::VM_PROT_EXECUTE.0 != 0,
-                  writable:   initprot & macho::VM_PROT_WRITE.0 != 0,
+                  writable: initprot & macho::VM_PROT_WRITE.0 != 0,
                });
             },
             LoadCommandVariant::LinkeditData(command)
@@ -391,23 +340,19 @@ impl<'a> MachOFile<'a> {
 
 /// A PE64 image mapped at its preferred image base, for offline desktop tools.
 pub struct PeFile<'a> {
-   pub image:   Image<'a>,
+   pub image: Image<'a>,
    pub machine: Machine,
 }
 
 impl<'a> PeFile<'a> {
    pub fn parse(path: &str, data: &'a [u8]) -> Result<Self, FileError> {
-      let parse = |source| {
-         FileError::Parse {
-            path: path.to_owned(),
-            source,
-         }
+      let parse = |source| FileError::Parse {
+         path: path.to_owned(),
+         source,
       };
-      let address = |source| {
-         FileError::Address {
-            path: path.to_owned(),
-            source,
-         }
+      let address = |source| FileError::Address {
+         path: path.to_owned(),
+         source,
       };
 
       let pe = PeFile64::parse(data).map_err(parse)?;
@@ -415,7 +360,7 @@ impl<'a> PeFile<'a> {
          IMAGE_FILE_MACHINE_AMD64 => Machine::X86_64,
          other => {
             return Err(FileError::Machine {
-               path:    path.to_owned(),
+               path: path.to_owned(),
                machine: other.0,
             });
          },
@@ -441,10 +386,10 @@ impl<'a> PeFile<'a> {
          let vsize = u64::from(section.virtual_size.get(LittleEndian));
          let memsz = vsize.max(bytes.len() as u64);
          segments.push(Segment {
-            addr:       image_base + rva,
-            bytes:      mapped(bytes, memsz).map_err(address)?,
+            addr: image_base + rva,
+            bytes: mapped(bytes, memsz).map_err(address)?,
             executable: chars & IMAGE_SCN_MEM_EXECUTE.0 != 0,
-            writable:   chars & IMAGE_SCN_MEM_WRITE.0 != 0,
+            writable: chars & IMAGE_SCN_MEM_WRITE.0 != 0,
          });
       }
 
@@ -484,21 +429,17 @@ impl<'a> BinaryFile<'a> {
       } else if data.starts_with(&macho::MH_MAGIC_64.to_le_bytes()) {
          Ok(Self::MachO(MachOFile::parse(path, data)?))
       } else if data.starts_with(&macho::FAT_MAGIC.to_be_bytes()) {
-         let parse = |source| {
-            FileError::Parse {
-               path: path.to_owned(),
-               source,
-            }
+         let parse = |source| FileError::Parse {
+            path: path.to_owned(),
+            source,
          };
          let arches = MachOFatFile32::parse(data).map_err(parse)?.arches();
          let arm64 = arches
             .iter()
             .find(|arch| arch.cputype() == macho::CPU_TYPE_ARM64)
-            .ok_or_else(|| {
-               FileError::CpuType {
-                  path:    path.to_owned(),
-                  cputype: arches.first().map_or(0, |arch| arch.cputype().0),
-               }
+            .ok_or_else(|| FileError::CpuType {
+               path: path.to_owned(),
+               cputype: arches.first().map_or(0, |arch| arch.cputype().0),
             })?;
          Ok(Self::MachO(MachOFile::parse(
             path,
@@ -641,22 +582,20 @@ where
 {
    for section in sections.iter() {
       let contents = || {
-         section.data(endian, data).map_err(|source| {
-            FileError::Parse {
+         section
+            .data(endian, data)
+            .map_err(|source| FileError::Parse {
                path: path.to_owned(),
                source,
-            }
-         })
+            })
       };
 
       let relocs = match section.sh_type(endian) {
          elf::SHT_RELA => plain_rela(contents()?, relative),
          elf::SHT_ANDROID_RELA => {
-            aps2(contents()?, relative).map_err(|message| {
-               FileError::Packed {
-                  path: path.to_owned(),
-                  message,
-               }
+            aps2(contents()?, relative).map_err(|message| FileError::Packed {
+               path: path.to_owned(),
+               message,
             })?
          },
          _ => continue,
@@ -666,11 +605,9 @@ where
          let segment = segments
             .iter_mut()
             .find(|segment| segment.contains(offset))
-            .ok_or_else(|| {
-               FileError::Relocation {
-                  path: path.to_owned(),
-                  offset,
-               }
+            .ok_or_else(|| FileError::Relocation {
+               path: path.to_owned(),
+               offset,
             })?;
          let at = offset - segment.addr;
          segment.bytes.to_mut()[at..at + 8].copy_from_slice(&addend.to_le_bytes());

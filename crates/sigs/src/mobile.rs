@@ -1,16 +1,9 @@
 //! Where Android Phoenix (`liblibdiscord_wasm_host.so`) keeps what the runtime
 //! patches, shared by the runtime and `sigscan check`.
 
-use phoenix_hook::{
-   image::Image,
-   pattern::Pattern,
-};
+use phoenix_hook::{image::Image, pattern::Pattern};
 
-use crate::{
-   Found,
-   StaffField,
-   one,
-};
+use crate::{Found, StaffField, one};
 
 /// `flag_override` in the arm64 store state.
 ///
@@ -37,7 +30,7 @@ pub fn staff_aarch64(image: &Image<'_>) -> Found<StaffField> {
       .filter_map(|at| {
          let base = add(image.read_u32(at)?)?;
          Some(StaffField {
-            tag:   base + ldr(image.read_u32(at + 24)?),
+            tag: base + ldr(image.read_u32(at + 24)?),
             value: base + ldr(image.read_u32(at + 28)?),
          })
       })

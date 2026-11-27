@@ -98,7 +98,7 @@ impl TrayAction {
    )]
    const fn label(self) -> &'static str {
       match self {
-         Self::OpenSettings => "Open Nyaacord Settings",
+         Self::OpenSettings => "Open NyaaCord Settings",
          Self::OpenDevtools => "Open DevTools (Console)",
          Self::ReloadAll => "Reload All Plugins",
          Self::CheckUpdates => "Check for Updates",
@@ -130,7 +130,7 @@ impl TrayAction {
          },
          Self::CopyUrl => {
             if copy(&config.dashboard_url).is_ok() {
-               Os::notify("Nyaacord", &format!("Copied {}", config.dashboard_url));
+               Os::notify("NyaaCord", &format!("Copied {}", config.dashboard_url));
             }
          },
          Self::OpenPlugins => {
@@ -191,7 +191,7 @@ pub fn start_tray(config: TrayConfig) {
    Os::start_tray();
 }
 
-/// Opens the `Nyaacord` settings dashboard in a standalone chromeless app window
+/// Opens the `NyaaCord` settings dashboard in a standalone chromeless app window
 /// (a Chromium `--app` window when available, else the system browser).
 pub fn open_settings() {
    if let Some(config) = config() {
@@ -199,7 +199,7 @@ pub fn open_settings() {
    }
 }
 
-/// Opens the `Nyaacord` `DevTools` / Runtime Console directly in a standalone
+/// Opens the `NyaaCord` `DevTools` / Runtime Console directly in a standalone
 /// window (`Ctrl+Shift+I` while Discord Phoenix is focused).
 pub fn open_devtools() {
    if let Some(config) = config() {
@@ -271,7 +271,7 @@ pub fn open_url(url: &str) -> Result<(), Error> {
 /// Shows a short desktop toast / notification message.
 pub fn toast(message: &str) {
    log::info!("[toast] {message}");
-   Os::notify("Nyaacord", message);
+   Os::notify("NyaaCord", message);
 }
 
 /// Shows a titled desktop notification.
@@ -283,7 +283,7 @@ pub fn notify(title: &str, body: Option<&str>) {
       },
       _ => {
          log::info!("[notify] {title}");
-         Os::notify("Nyaacord", title);
+         Os::notify("NyaaCord", title);
       },
    }
 }
@@ -310,7 +310,7 @@ mod tests {
 
    #[test]
    fn dashboard_html_is_embedded() {
-      assert!(DASHBOARD_HTML.contains("<title>Nyaacord Settings</title>"));
+      assert!(DASHBOARD_HTML.contains("<title>NyaaCord Settings</title>"));
       assert!(DASHBOARD_HTML.contains("/plugins"));
       assert!(DASHBOARD_HTML.contains("/catalog"));
       assert!(DASHBOARD_HTML.contains("/icon.gif"));

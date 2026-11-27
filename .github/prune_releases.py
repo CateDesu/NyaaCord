@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prune superseded Nyaacord GitHub releases after verifying the newest release."""
+"""Prune superseded NyaaCord GitHub releases after verifying the newest release."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Callable
 
 DEFAULT_REPO = "CateDesu/NyaaCord"
-APPIMAGE_ASSET = "Nyaacord-x86_64.AppImage"
-LEGACY_APPIMAGE_ASSET = "NyaaCord-x86_64.AppImage"
+APPIMAGE_ASSET = "NyaaCord-x86_64.AppImage"
+LEGACY_APPIMAGE_ASSET = "Nyaacord-x86_64.AppImage"
 CHECKSUMS_ASSET = "SHA256SUMS.txt"
 REQUIRED_ASSETS = (APPIMAGE_ASSET, CHECKSUMS_ASSET)
 RELEASE_PROJECTION = (
@@ -151,10 +151,10 @@ def retention_plan(releases: list[dict], tag: str | None = None) -> dict:
         parse_version(tag)
         matches = [r for r in releases if r.get("tag_name") == tag]
         if len(matches) != 1:
-            raise ValueError("Published Nyaacord release with required assets is required")
+            raise ValueError("Published NyaaCord release with required assets is required")
         keep = matches[0]
         if not is_stable(keep) or not has_required_assets(keep):
-            raise ValueError("Published Nyaacord release with required assets is required")
+            raise ValueError("Published NyaaCord release with required assets is required")
         keep_tag = tag
     else:
         candidates = [
@@ -163,7 +163,7 @@ def retention_plan(releases: list[dict], tag: str | None = None) -> dict:
             if is_stable(r) and is_numeric_tag(r.get("tag_name")) and has_required_assets(r)
         ]
         if not candidates:
-            raise ValueError("Published Nyaacord release with required assets is required")
+            raise ValueError("Published NyaaCord release with required assets is required")
         keep = max(candidates, key=lambda r: parse_version(r["tag_name"]))
         keep_tag = keep["tag_name"]
 
@@ -355,7 +355,7 @@ def prune_releases(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Prune superseded Nyaacord GitHub releases.")
+    parser = argparse.ArgumentParser(description="Prune superseded NyaaCord GitHub releases.")
     parser.add_argument("--tag", default=None, help="Published tag to keep; defaults to newest stable release")
     parser.add_argument("--dir", dest="local_dir", default=None, help="Optional local dist directory to compare against")
     parser.add_argument("--repo", default=None, help="GitHub owner/name override")

@@ -1,4 +1,4 @@
-//! `Nyaacord-x86_64.exe`, the self-contained Windows launcher, also usable as
+//! `NyaaCord-x86_64.exe`, the self-contained Windows launcher, also usable as
 //! `phoenix-inject [phoenix.dll] [-- discord args]`.
 //!
 //! `Discord.exe` resolves its imports from System32 only (`DependentLoadFlags`
@@ -9,7 +9,7 @@
 //!
 //! Without a DLL argument it installs itself, `phoenix.dll`,
 //! `libplm.plugins.so`, and any bundled Discord Phoenix client into
-//! `%LOCALAPPDATA%\Nyaacord` with Start Menu and Desktop shortcuts. User data
+//! `%LOCALAPPDATA%\NyaaCord` with Start Menu and Desktop shortcuts. User data
 //! and settings in `%LOCALAPPDATA%\DiscordPhoenix` stay untouched across
 //! updates and uninstalls. `--uninstall` removes the install and shortcuts.
 
@@ -35,19 +35,19 @@ mod embedded {
 const VERSION: &str = env!("NYAACORD_VERSION");
 
 const USAGE: &str = "\
-Usage: Nyaacord-x86_64.exe [options] [-- Discord arguments]
+Usage: NyaaCord-x86_64.exe [options] [-- Discord arguments]
 
 Options:
-  --install-only        Install to %LOCALAPPDATA%\\Nyaacord and create shortcuts without launching
-  --check-update        Check GitHub Releases for a newer Nyaacord release
-  --update              Download, verify, and replace Nyaacord with the latest release
-  --rollback            Restore the previous Nyaacord backup
-  --uninstall           Remove shortcuts and %LOCALAPPDATA%\\Nyaacord
+  --install-only        Install to %LOCALAPPDATA%\\NyaaCord and create shortcuts without launching
+  --check-update        Check GitHub Releases for a newer NyaaCord release
+  --update              Download, verify, and replace NyaaCord with the latest release
+  --rollback            Restore the previous NyaaCord backup
+  --uninstall           Remove shortcuts and %LOCALAPPDATA%\\NyaaCord
   --no-runtime          Launch Discord with only the access gate opened
   --gate-only           Alias for --no-runtime
   --target-exe <path>   Override the Discord.exe path (or set NYAACORD_DISCORD_EXE)
   --quiet, -q           Suppress status messages and modal dialogs
-  --version             Print Nyaacord version
+  --version             Print NyaaCord version
   --help, -h            Show this help message";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -416,7 +416,7 @@ fn main() {
       Ok(CliOptions {
          mode: Mode::Version,
          ..
-      }) => println!("Nyaacord {VERSION}"),
+      }) => println!("NyaaCord {VERSION}"),
       Ok(CliOptions {
          mode: Mode::Help, ..
       }) => println!("{USAGE}"),
@@ -483,7 +483,7 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
    allow(dead_code, reason = "install home helper used on Windows and in tests")
 )]
 fn install_home_in(local: &Path) -> PathBuf {
-   local.join("Nyaacord")
+   local.join("NyaaCord")
 }
 
 #[cfg_attr(
@@ -564,7 +564,7 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 }
 
 /// Returns the target Discord executable path first, followed by the alternate
-/// known Nyaacord/DiscordPhoenix install path when `exe` is one of the two and
+/// known NyaaCord/DiscordPhoenix install path when `exe` is one of the two and
 /// was not explicitly overridden.
 #[cfg_attr(
    not(any(windows, test)),
@@ -967,7 +967,7 @@ fn decide_installed_action(
 )]
 fn installed_version_unknown_error(existing_launcher: &Path) -> misstep::Report {
    misstep::Report::msg(format!(
-      "could not verify version of installed Nyaacord at {}; refusing to overwrite. Run --install-only to reinstall.",
+      "could not verify version of installed NyaaCord at {}; refusing to overwrite. Run --install-only to reinstall.",
       existing_launcher.display()
    ))
 }
@@ -1654,8 +1654,8 @@ impl ClientTransaction {
          }
       }
       for name in [
-         "Nyaacord.exe",
          "NyaaCord.exe",
+         "Nyaacord.exe",
          "phoenix.dll",
          "libplm.plugins.so",
          "version.txt",
@@ -2044,7 +2044,7 @@ mod windows {
          MessageBoxW(
             ptr::null_mut(),
             wide(text).as_ptr(),
-            wide("Nyaacord").as_ptr(),
+            wide("NyaaCord").as_ptr(),
             kind,
          )
       }
@@ -2248,42 +2248,90 @@ mod windows {
       !same_contents
    }
 
-   /// Installs `Nyaacord.exe` and embedded assets inside `tx`; shortcuts refresh after commit.
+   // NTFS preserves the original spelling when an existing path is opened again.
+   fn refresh_install_case(path: &Path) -> misstep::Result<bool> {
+      let parent = path.parent().context("install path has no parent")?;
+      let wanted = path.file_name().context("install path has no name")?;
+      let entries = match fs::read_dir(parent) {
+         Ok(entries) => entries,
+         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+         Err(err) => return Err(err.into()),
+      };
+      let mut matching = None;
+      for entry in entries {
+         let entry = entry?;
+         if entry.file_name().eq_ignore_ascii_case(wanted) {
+            if let Some(previous) = matching {
+               let previous: PathBuf = previous;
+               bail!(
+                  "both {} and {} exist",
+                  previous.display(),
+                  entry.path().display()
+               );
+            }
+            matching = Some(entry.path());
+         }
+      }
+      let Some(existing) = matching.filter(|entry| entry.file_name() != Some(wanted)) else {
+         return Ok(false);
+      };
+      match fs::rename(&existing, path) {
+         Ok(()) => Ok(true),
+         Err(err)
+            if err.kind() == io::ErrorKind::PermissionDenied
+               || matches!(err.raw_os_error(), Some(5 | 32 | 33)) =>
+         {
+            let _ = writeln!(
+               io::stderr(),
+               "Could not update spelling of {}: {err}",
+               path.display()
+            );
+            Ok(false)
+         },
+         Err(err) => Err(err)
+            .with_context(|| format!("updating spelling of {}", path.display()))
+            .map_err(Into::into),
+      }
+   }
+
+   /// Installs `NyaaCord.exe` and embedded assets inside `tx`; shortcuts refresh after commit.
    fn install_self(
       tx: &mut ClientTransaction,
       home: &Path,
       me: &Path,
    ) -> misstep::Result<(PathBuf, PathBuf, bool)> {
       fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
-      let launcher = home.join("Nyaacord.exe");
+      let launcher = home.join("NyaaCord.exe");
+      let renamed = refresh_install_case(&launcher)?;
       let copied = !same_file(me, &launcher);
       if copied && launcher_differs(me, &launcher) {
          tx.copy_file(me, &launcher)
-            .context("installing Nyaacord.exe")?;
+            .context("installing NyaaCord.exe")?;
       }
 
       let (dll, assets_changed) = sync_embedded_assets(tx, home)?;
       Ok((
          launcher,
          dll,
-         super::should_refresh_shortcuts(copied, assets_changed),
+         super::should_refresh_shortcuts(copied || renamed, assets_changed),
       ))
    }
 
-   /// Manages `Nyaacord.lnk` (and removes legacy `Sunbird.lnk` and `NyaaCord.lnk`) on Start Menu and Desktop.
+   /// Refreshes Start Menu and Desktop shortcuts with the installed launcher spelling.
    fn shortcuts(launcher: &Path, remove: bool) -> misstep::Result<()> {
       let script = format!(
-         "$w = New-Object -ComObject WScript.Shell; \
+         "$ErrorActionPreference = 'Stop'; $w = New-Object -ComObject WScript.Shell; \
           foreach ($dir in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'))) {{ \
+             if (-not $dir) {{ continue }}; \
              $legacy = Join-Path $dir 'Sunbird.lnk'; \
-             if (Test-Path -LiteralPath $legacy) {{ Remove-Item -LiteralPath $legacy -ErrorAction SilentlyContinue }}; \
-             $p = Join-Path $dir 'Nyaacord.lnk'; \
-             if (Test-Path -LiteralPath $p) {{ Remove-Item -LiteralPath $p -ErrorAction SilentlyContinue }}; \
+             if (Test-Path -LiteralPath $legacy) {{ Remove-Item -LiteralPath $legacy }}; \
+             $p = Join-Path $dir 'NyaaCord.lnk'; \
+             if (Test-Path -LiteralPath $p) {{ Remove-Item -LiteralPath $p -ErrorAction Stop }}; \
              if (${remove}) {{ continue }}; \
              $s = $w.CreateShortcut($p); \
              $s.TargetPath = $env:NC_TARGET; \
              $s.IconLocation = $env:NC_TARGET + ',0'; \
-             $s.Description = 'Nyaacord for Discord Phoenix'; \
+             $s.Description = 'NyaaCord for Discord Phoenix'; \
              $s.Save() \
           }}"
       );
@@ -2294,9 +2342,15 @@ mod windows {
          .status()
          .context("running powershell.exe")?;
       if !status.success() {
-         bail!("updating Nyaacord shortcuts failed");
+         bail!("updating NyaaCord shortcuts failed");
       }
       Ok(())
+   }
+
+   fn refresh_shortcuts(launcher: &Path, remove: bool) {
+      if let Err(err) = shortcuts(launcher, remove) {
+         let _ = writeln!(io::stderr(), "Could not update NyaaCord shortcuts: {err}");
+      }
    }
 
    fn build_updater_config(
@@ -2322,12 +2376,25 @@ mod windows {
 
    fn default_update_target() -> misstep::Result<PathBuf> {
       if let Ok(local) = local_app_data() {
-         let installed = install_home_in(&local).join("Nyaacord.exe");
+         let installed = install_home_in(&local).join("NyaaCord.exe");
          if installed.is_file() {
             return Ok(installed);
          }
       }
       Ok(env::current_exe().context("resolving current executable")?)
+   }
+
+   fn refresh_updated_shortcuts(target: &Path) -> misstep::Result<()> {
+      if let Ok(local) = local_app_data() {
+         let home = install_home_in(&local);
+         let launcher = home.join("NyaaCord.exe");
+         if super::paths_equal(target, &launcher) {
+            refresh_install_case(&home)?;
+            refresh_install_case(&launcher)?;
+            refresh_shortcuts(&launcher, false);
+         }
+      }
+      Ok(())
    }
 
    fn write_version_beside(target: &Path, ver: &str) {
@@ -2435,7 +2502,7 @@ mod windows {
          force,
       ) {
          ManualUpdatePrecheck::UnknownTarget => bail!(
-            "could not verify version of installed Nyaacord at {}; pass --force to replace",
+            "could not verify version of installed NyaaCord at {}; pass --force to replace",
             target.display()
          ),
          ManualUpdatePrecheck::ForceFetch => Ok(Some(fetch_latest(cfg)?)),
@@ -2487,7 +2554,7 @@ mod windows {
             return Ok(());
          },
          LockedUpdateAction::UnknownTarget => bail!(
-            "could not verify version of installed Nyaacord at {}; pass --force to replace",
+            "could not verify version of installed NyaaCord at {}; pass --force to replace",
             target.display()
          ),
          LockedUpdateAction::Apply => {},
@@ -2535,6 +2602,8 @@ mod windows {
          let _ = writeln!(io::stderr());
       }
       write_version_beside(&outcome.target, &outcome.version);
+      drop(lock);
+      refresh_updated_shortcuts(&outcome.target)?;
       ui.info(&format!(
          "Updated {} to {}",
          outcome.target.display(),
@@ -2557,6 +2626,8 @@ mod windows {
       if let Some(restored_ver) = query_exe_version(&target) {
          write_version_beside(&target, &restored_ver);
       }
+      drop(lock);
+      refresh_updated_shortcuts(&target)?;
       ui.info(&format!(
          "Rolled back {} from {}",
          target.display(),
@@ -2568,15 +2639,15 @@ mod windows {
    fn cmd_uninstall(ui: &Ui) -> misstep::Result<()> {
       let local = local_app_data()?;
       let home = install_home_in(&local);
-      let _ = shortcuts(&home.join("Nyaacord.exe"), true);
+      refresh_shortcuts(&home.join("NyaaCord.exe"), true);
       match fs::remove_dir_all(&home) {
          Err(err) if err.kind() != io::ErrorKind::NotFound => {
             ui.notice(&format!(
-               "Shortcuts removed, but {} could not be fully deleted ({err}). Close Discord and delete it.",
+               "{} could not be fully deleted ({err}). Close Discord and delete it.",
                home.display()
             ));
          },
-         _ => ui.notice("Nyaacord has been uninstalled. Your Discord data and settings were kept."),
+         _ => ui.notice("NyaaCord has been uninstalled. Your Discord data and settings were kept."),
       }
       Ok(())
    }
@@ -2606,7 +2677,7 @@ mod windows {
          cmd.arg("--").args(discord_args);
       }
       cmd.spawn()
-         .with_context(|| format!("launching installed Nyaacord at {}", launcher.display()))?;
+         .with_context(|| format!("launching installed NyaaCord at {}", launcher.display()))?;
       Ok(())
    }
 
@@ -2675,6 +2746,12 @@ mod windows {
       };
       write_version_beside(&outcome.target, &new_ver);
       drop(lock);
+      if let Err(err) = refresh_updated_shortcuts(&outcome.target) {
+         let _ = writeln!(
+            io::stderr(),
+            "Could not refresh the NyaaCord install: {err}"
+         );
+      }
 
       if spawn_launcher_handoff(
          &outcome.target,
@@ -2760,18 +2837,18 @@ mod windows {
       let with_nyaacord = all_target && open.iter().any(|&(_, pid, _)| has_module(pid, dll_name));
       let restart = if no_runtime {
          ui.ask(
-            "Discord is already running.\n\nRestart it without the Nyaacord plugin runtime? \
+            "Discord is already running.\n\nRestart it without the NyaaCord plugin runtime? \
              Any active call will end.",
          )
       } else if !all_target {
          ui.ask(
-            "Discord is already running from another installation.\n\nRestart it with Nyaacord? \
+            "Discord is already running from another installation.\n\nRestart it with NyaaCord? \
              Any active call will end.",
          )
       } else {
          !with_nyaacord
             && ui.ask(
-               "Discord is already running without Nyaacord.\n\nRestart it with Nyaacord? \
+               "Discord is already running without NyaaCord.\n\nRestart it with NyaaCord? \
                 Any active call will end.",
             )
       };
@@ -2940,7 +3017,8 @@ mod windows {
       quiet: bool,
    ) -> misstep::Result<Option<(PathBuf, PathBuf, Option<PathBuf>)>> {
       validate_bundled_client(me)?;
-      let existing_launcher = home.join("Nyaacord.exe");
+      let home_renamed = refresh_install_case(home)?;
+      let existing_launcher = home.join("NyaaCord.exe");
       let had_launcher = existing_launcher.is_file();
       if had_launcher
          && check_existing_launcher(
@@ -2974,10 +3052,10 @@ mod windows {
       let will_replace = launcher_differs(me, &existing_launcher);
       let mut tx =
          begin_bundled_client_sync_locked(lock, me, home, !explicit_target, will_replace)?;
-      let (launcher, dll, refresh_shortcuts) = install_self(&mut tx, home, me)?;
+      let (launcher, dll, shortcuts_changed) = install_self(&mut tx, home, me)?;
       let bundled_exe = tx.commit();
-      if refresh_shortcuts {
-         let _ = shortcuts(&launcher, false);
+      if shortcuts_changed || home_renamed {
+         refresh_shortcuts(&launcher, false);
       }
 
       if !had_launcher
@@ -3031,7 +3109,7 @@ mod windows {
       let exe = resolve_discord_exe_with(target_exe, env_discord, bundled_exe, &local);
       if !exe.is_file() {
          bail!(
-            "Discord Phoenix is not installed at {}. Download the full Nyaacord executable or pass --target-exe.",
+            "Discord Phoenix is not installed at {}. Download the full NyaaCord executable or pass --target-exe.",
             exe.display()
          );
       }
@@ -3050,7 +3128,7 @@ mod windows {
          app: &app,
          dll: &dll,
       };
-      // A second Discord instance hands off to the running one and exits, so Nyaacord
+      // A second Discord instance hands off to the running one and exits, so NyaaCord
       // would never load into the Discord window the user sees.
       if !handle_running_discord(
          &launch_target,
@@ -3085,7 +3163,7 @@ mod windows {
    pub fn run(mode: Mode, ui: &Ui) -> misstep::Result<()> {
       match mode {
          Mode::Version => {
-            let _ = writeln!(io::stdout(), "Nyaacord {VERSION}");
+            let _ = writeln!(io::stdout(), "NyaaCord {VERSION}");
             Ok(())
          },
          Mode::Help => {
@@ -3097,14 +3175,15 @@ mod windows {
             let home = install_home_in(&local);
             let me = env::current_exe().context("resolving current executable")?;
             validate_bundled_client(&me)?;
+            refresh_install_case(&home)?;
             fs::create_dir_all(&home).with_context(|| format!("creating {}", home.display()))?;
             let lock = acquire_install_lock(&home)?;
-            let will_replace = launcher_differs(&me, &home.join("Nyaacord.exe"));
+            let will_replace = launcher_differs(&me, &home.join("NyaaCord.exe"));
             let mut tx = begin_bundled_client_sync_locked(lock, &me, &home, true, will_replace)?;
             let (launcher, dll, _) = install_self(&mut tx, &home, &me)?;
             let bundled = tx.commit();
-            let _ = shortcuts(&launcher, false);
-            ui.info(&format!("Installed Nyaacord {VERSION}"));
+            refresh_shortcuts(&launcher, false);
+            ui.info(&format!("Installed NyaaCord {VERSION}"));
             ui.info(&format!("Launcher: {}", launcher.display()));
             ui.info(&format!("Loader: {}", dll.display()));
             if let Some(client_exe) = bundled {
@@ -3183,14 +3262,14 @@ mod tests {
          parse_args(os_args(&[
             "--update",
             "--target",
-            r"C:\Apps\Nyaacord.exe",
+            r"C:\Apps\NyaaCord.exe",
             "--force",
             "--quiet"
          ]))
          .expect("update"),
          CliOptions {
             mode: Mode::Update {
-               target: Some(PathBuf::from(r"C:\Apps\Nyaacord.exe")),
+               target: Some(PathBuf::from(r"C:\Apps\NyaaCord.exe")),
                repo: None,
                api: None,
                timeout: None,
@@ -3200,10 +3279,10 @@ mod tests {
          }
       );
       assert_eq!(
-         parse_args(os_args(&["--rollback", "--target=Nyaacord.exe"])).expect("rollback"),
+         parse_args(os_args(&["--rollback", "--target=NyaaCord.exe"])).expect("rollback"),
          CliOptions {
             mode: Mode::Rollback {
-               target: Some(PathBuf::from("Nyaacord.exe")),
+               target: Some(PathBuf::from("NyaaCord.exe")),
             },
             quiet: false,
          }
@@ -3701,7 +3780,7 @@ mod tests {
       let (bytes_v2, _) = build_pe_with_zip(&[(CLIENT_EXE_NAME, b"discord-v2")]);
       std::fs::write(&exe_v2, &bytes_v2).expect("write v2 exe");
 
-      let launcher = home.join("Nyaacord.exe");
+      let launcher = home.join("NyaaCord.exe");
       let dll = home.join("phoenix.dll");
       let plugins = home.join("libplm.plugins.so");
       let version_file = home.join("version.txt");
@@ -3941,7 +4020,7 @@ mod tests {
             std::process::Command::new(&missing_exe)
                .spawn()
                .with_context(|| {
-                  format!("launching installed Nyaacord at {}", missing_exe.display())
+                  format!("launching installed NyaaCord at {}", missing_exe.display())
                })?;
             Ok(())
          },
@@ -3953,7 +4032,7 @@ mod tests {
       .expect_err("spawn failure during HandOffToInstalled must propagate Err");
       assert!(!ran_update);
       assert!(
-         err.to_string().contains("launching installed Nyaacord"),
+         err.to_string().contains("launching installed NyaaCord"),
          "unexpected error: {err}"
       );
 

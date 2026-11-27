@@ -104,6 +104,15 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
       Machine::X86_64 => {
          let abi = x86::Abi::of(image);
          let prologues = desktop::Prologues::of(abi);
+         report(
+            "window title",
+            desktop::window_title(image).map(|title| {
+               format!(
+                  "initial {:#x}, field {:#x}, setter {:#x}",
+                  title.options, title.inline_title, title.setter
+               )
+            }),
+         );
          let http = DesktopHttpTransport::locate(image);
          report(
             "http transport",
@@ -167,6 +176,11 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
                .map_err(Clone::clone),
          );
          if abi == x86::Abi::SysV {
+            report(
+               "PipeWire render buffer",
+               desktop::pipewire_buffer(image)
+                  .map(|found| format!("shrink {}, target {}", at(found.shrink), at(found.target))),
+            );
             report(
                "sni title",
                tray_app

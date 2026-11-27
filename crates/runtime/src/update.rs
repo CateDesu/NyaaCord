@@ -277,8 +277,8 @@ pub fn check_now() {
          Ok(None) => {
             let cur = app_version();
             log::info!("up to date ({cur})");
-            finish(Some(format!("Nyaacord v{cur} is up to date.")));
-            crate::toast("Nyaacord is up to date");
+            finish(Some(format!("NyaaCord v{cur} is up to date.")));
+            crate::toast("NyaaCord is up to date");
          },
          Err(err) => {
             log::info!("update check: {err}");
@@ -325,8 +325,8 @@ pub fn apply() {
       let Some(update) = update else {
          let cur = app_version();
          log::info!("update apply: up to date ({cur})");
-         finish(Some(format!("Nyaacord v{cur} is up to date.")));
-         crate::toast("Nyaacord is up to date");
+         finish(Some(format!("NyaaCord v{cur} is up to date.")));
+         crate::toast("NyaaCord is up to date");
          return;
       };
       // The site's plugins are built against its loader and can call API this
@@ -340,7 +340,7 @@ pub fn apply() {
          }
          if update.plugins.is_empty() {
             let msg = if update.release.is_some() {
-               format!("Nyaacord v{version} is available.")
+               format!("NyaaCord v{version} is available.")
             } else {
                format!("Upstream build {version} is available.")
             };

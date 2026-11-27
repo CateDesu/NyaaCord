@@ -8,9 +8,12 @@
 
 use std::ffi::c_void;
 
-#[cfg(target_arch = "x86_64")] pub mod desktop;
-#[cfg(feature = "file")] pub mod file;
-#[cfg(target_arch = "x86_64")] pub mod http;
+#[cfg(target_arch = "x86_64")]
+pub mod desktop;
+#[cfg(feature = "file")]
+pub mod file;
+#[cfg(target_arch = "x86_64")]
+pub mod http;
 pub mod ios;
 pub mod mobile;
 pub mod registry;
@@ -30,7 +33,7 @@ fn one<T: Copy>(what: &str, found: &[T]) -> Found<T> {
 /// tag and value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StaffField {
-   pub tag:   usize,
+   pub tag: usize,
    pub value: usize,
 }
 
@@ -64,10 +67,18 @@ pub struct RawStr {
 }
 
 /// Host fields after `name` and `data` that a handler reads and a synthetic
-/// event must carry. The arm32 handler reads only `name` and `data`.
-#[cfg(not(target_arch = "arm"))]
+/// event must carry. Desktop Phoenix and arm32 handlers read only `name` and `data`.
+#[cfg(not(any(
+   target_os = "windows",
+   all(target_os = "linux", target_arch = "x86_64"),
+   target_arch = "arm"
+)))]
 pub const REST_WORDS: usize = 4;
-#[cfg(target_arch = "arm")]
+#[cfg(any(
+   target_os = "windows",
+   all(target_os = "linux", target_arch = "x86_64"),
+   target_arch = "arm"
+))]
 pub const REST_WORDS: usize = 0;
 
 /// Phoenix's gateway event, `name` and `data` are borrowed UTF-8 with `data`
@@ -80,6 +91,12 @@ pub struct GatewayEvent {
    pub data: RawStr,
    pub rest: [u64; REST_WORDS],
 }
+
+#[cfg(any(
+   target_os = "windows",
+   all(target_os = "linux", target_arch = "x86_64")
+))]
+const _: () = assert!(size_of::<GatewayEvent>() == 2 * size_of::<RawStr>());
 
 /// The Rust `Result` a handler returns through a hidden pointer:
 /// - 96 bytes (12 words) on Desktop Phoenix (`Discord.exe`, Linux

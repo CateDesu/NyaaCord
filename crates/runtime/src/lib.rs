@@ -69,7 +69,7 @@ pub enum Error {
    InvalidPlugin { reason: String },
    #[error(transparent)]
    Fetch(#[from] fetch::FetchError),
-   #[error("Nyaacord needs runtime version {version}, the site's plugins need it")]
+   #[error("NyaaCord needs runtime version {version}, the site's plugins need it")]
    LoaderOutdated { version: String },
 }
 

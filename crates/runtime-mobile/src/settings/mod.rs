@@ -1,4 +1,4 @@
-//! A "Nyaacord" row in Discord's Settings that opens phoenix's own
+//! A "NyaaCord" row in Discord's Settings that opens phoenix's own
 //! pages.
 //!
 //! Phoenix builds its UI as a stream of UI-op batches from Rust to Java. This
@@ -43,7 +43,7 @@ const FIRST_ID: i32 = 0x5000_0000;
 /// from 0, so phoenix takes them downward from the top.
 const SLOT_END: i32 = 1 << 16;
 /// The Settings row and the page it opens.
-const TITLE: &str = "Nyaacord";
+const TITLE: &str = "NyaaCord";
 const ICON_PLUGIN: &str = "res://ic_mana_puzzle_piece_plus";
 const ICON_CHECK: &str = "res://ic_mana_checkmark_large";
 const ICON_RELOAD: &str = "res://ic_mana_puzzle_piece_retry";
@@ -134,7 +134,7 @@ enum Slot {
    Log,
 }
 
-/// The "Nyaacord" row in the Settings list.
+/// The "NyaaCord" row in the Settings list.
 struct Entry {
    root: i32,
    ids: Vec<i32>,

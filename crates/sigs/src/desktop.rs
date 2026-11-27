@@ -15,6 +15,7 @@ use std::{
    sync::{Arc, Mutex, PoisonError},
 };
 
+use iced_x86::{Decoder, DecoderOptions, Instruction, Mnemonic, OpKind};
 use phoenix_hook::{
    image::Image,
    pattern::Pattern,
@@ -467,6 +468,156 @@ fn rc_store(code: &[u8]) -> Option<(usize, Option<usize>)> {
    })
 }
 
+/// The main window options constructor and GPUI's borrowed title setter.
+pub struct WindowTitle {
+   pub options: usize,
+   pub options_head: Prologue,
+   pub inline_title: usize,
+   pub setter: usize,
+   pub setter_head: Prologue,
+}
+
+fn initial_title_field(image: &Image<'_>, func: usize, abi: Abi) -> Option<usize> {
+   let code = function_code(image, func, "window options").ok()?;
+   let ins: Vec<_> = Decoder::with_ip(64, code, func as u64, DecoderOptions::NONE)
+      .into_iter()
+      .collect();
+   let same_slot = |load: &Instruction, slot: &Instruction, offset: u64| {
+      load.memory_base() == slot.memory_base()
+         && load.memory_index() == Register::None
+         && slot.memory_displacement64().checked_add(offset) == Some(load.memory_displacement64())
+   };
+   for args in ins.windows(7) {
+      let [save, text, slot, length, pop, out, call] = args else {
+         continue;
+      };
+      if save.mnemonic() != Mnemonic::Mov
+         || save.op1_register() != abi.arg(0)
+         || text.mnemonic() != Mnemonic::Lea
+         || text.op0_register() != abi.arg(1)
+         || !text.is_ip_rel_memory_operand()
+         || length.mnemonic() != Mnemonic::Push
+         || length.op0_kind() != OpKind::Immediate8to64
+         || pop.mnemonic() != Mnemonic::Pop
+         || pop.op0_register() != abi.arg(2)
+         || slot.mnemonic() != Mnemonic::Lea
+         || !matches!(slot.memory_base(), Register::RBP | Register::RSP)
+         || slot.memory_index() != Register::None
+         || out.mnemonic() != Mnemonic::Mov
+         || out.op0_register() != abi.arg(0)
+         || out.op1_register() != slot.op0_register()
+         || call.mnemonic() != Mnemonic::Call
+      {
+         continue;
+      }
+      let len = usize::from(length.immediate8());
+      if !matches!(len, 7 | 15)
+         || !matches!(
+            image.read(usize::try_from(text.ip_rel_memory_address()).ok()?, len),
+            Some(b"Discord" | b"Discord Phoenix")
+         )
+      {
+         continue;
+      }
+      // The constructor moves two adjacent vectors from that local into its return slot.
+      let fields: Vec<_> = ins
+         .windows(4)
+         .skip_while(|copy| copy[0].ip() < call.next_ip())
+         .filter_map(|copy| {
+            let [a, b, x, y] = copy else { return None };
+            if !copy.iter().all(|i| i.mnemonic() == Mnemonic::Movups)
+               || a.op1_kind() != OpKind::Memory
+               || b.op1_kind() != OpKind::Memory
+               || !same_slot(a, slot, 0)
+               || !same_slot(b, slot, 16)
+               || x.op0_kind() != OpKind::Memory
+               || y.op0_kind() != OpKind::Memory
+               || a.op0_register() == b.op0_register()
+               || x.op1_register() != a.op0_register()
+               || y.op1_register() != b.op0_register()
+               || x.memory_base() != save.op0_register()
+               || x.memory_index() != Register::None
+               || !same_slot(y, x, 16)
+            {
+               return None;
+            }
+            usize::try_from(x.memory_displacement64()).ok()
+         })
+         .collect();
+      return one("inline window title", &fields).ok();
+   }
+   None
+}
+
+/// Locates the startup title beside the desktop ID and the platform dispatch
+/// called by the dynamic window title formatter.
+pub fn window_title(image: &Image<'_>) -> Found<WindowTitle> {
+   let abi = Abi::of(image);
+   let options_head = Prologues::of(abi).frame;
+   let (setter_head, dispatch) = match abi {
+      Abi::SysV => (
+         Prologue {
+            pattern: Pattern::new("41 57 41 56 41 55 41 54 53 48 83 EC ?? 49 89 D6"),
+            len: 16,
+         },
+         Pattern::new(
+            "49 89 F7 48 89 FB 48 8B BF ?? ?? ?? ?? 48 8B 83 ?? ?? ?? ?? FF 90 ?? ?? ?? ??",
+         ),
+      ),
+      Abi::Win64 => (
+         Prologue {
+            pattern: Pattern::new("41 57 41 56 56 57 53 48 83 EC ?? 4C 89 C7"),
+            len: 14,
+         },
+         Pattern::new(
+            "48 89 D3 48 89 CE 48 8B 89 ?? ?? ?? ?? 48 8B 86 ?? ?? ?? ?? 48 8B 80 ?? ?? ?? ?? FF 15",
+         ),
+      ),
+   };
+   let functions = |text: &[u8]| -> HashSet<usize> {
+      image
+         .find_bytes(text)
+         .into_iter()
+         .flat_map(|ptr| lea_refs(image, ptr))
+         .filter_map(|site| image.function_bounds(site).map(|bounds| bounds.0))
+         .collect()
+   };
+   let options: Vec<_> = functions(b"com.discord.libdiscord")
+      .into_iter()
+      .filter(|&func| options_head.at(image, func))
+      .filter_map(|func| Some((func, initial_title_field(image, func, abi)?)))
+      .collect();
+   let (options, inline_title) = one("main window title", &options)?;
+   let mut setters = HashSet::new();
+   for formatter in functions(b" - Discord") {
+      for caller in callers(image, formatter) {
+         let Ok(code) = function_code(image, caller, "window title update") else {
+            continue;
+         };
+         for (_, target) in calls_in(image, caller, code.len()) {
+            if setter_head.at(image, target)
+               && image
+                  .read(target + setter_head.len, 36)
+                  .is_some_and(|code| dispatch.find_in(code).first() == Some(&0))
+            {
+               setters.insert(target);
+            }
+         }
+      }
+   }
+   let setter = one(
+      "platform window title setter",
+      &setters.into_iter().collect::<Vec<_>>(),
+   )?;
+   Ok(WindowTitle {
+      options,
+      options_head,
+      inline_title,
+      setter,
+      setter_head,
+   })
+}
+
 /// The field a `SharedString` setter replaces: `movzx eax, byte [reg + d];
 /// cmp al, 0xff; ...; cmp al, 0x19`, the drop of the old value.
 fn shared_string_setter(code: &[u8]) -> Option<usize> {
@@ -888,6 +1039,56 @@ pub fn sni_title(image: &Image<'_>, app_name: TrayAppName) -> Found<SniTitle> {
       got_slot,
       clone_fn,
    })
+}
+
+/// `PipeWire` stream shrink policy and the audio pipeline's initial buffer target.
+pub struct PipeWireBuffer {
+   pub shrink: usize,
+   pub target: usize,
+}
+
+/// Finds the `PipeWire` output stream's initial shrink flag and the render
+/// buffer reset that clears the initial quantum adjustment.
+pub fn pipewire_buffer(image: &Image<'_>) -> Found<PipeWireBuffer> {
+   if Abi::of(image) != Abi::SysV {
+      return Err("not a Linux desktop image".to_owned());
+   }
+   let flags = Pattern::new("8A 87 ?? ?? ?? ?? C3 48 8B 47 ?? 48 8B 40 28 C3 8A 87 ?? ?? ?? ?? C3");
+   let shrink = image
+      .segments
+      .iter()
+      .filter(|segment| segment.executable)
+      .flat_map(|segment| {
+         flags
+            .find_in(&segment.bytes)
+            .into_iter()
+            .map(|offset| segment.addr + offset)
+      })
+      .filter(|&func| {
+         image.pointers_to(func).iter().any(|&slot| {
+            slot >= 0x20
+               && image.read_usize(slot - 0x20) == Some(func + 7)
+               && image.read_usize(slot - 0x10) == Some(func + 16)
+         })
+      })
+      .collect::<Vec<_>>();
+   let shrink = one("PipeWire stream flag", &shrink)?;
+   let reset = Pattern::new(
+      "41 C7 85 ?? ?? ?? ?? 00 00 00 00 41 C6 85 ?? ?? ?? ?? 00 49 8B 85 ?? ?? ?? ?? C7 80 ?? ?? ?? ?? C0 03 00 00",
+   );
+   let target = image
+      .segments
+      .iter()
+      .filter(|segment| segment.executable)
+      .flat_map(|segment| {
+         reset
+            .find_in(&segment.bytes)
+            .into_iter()
+            .map(|offset| segment.addr + offset + 32)
+      })
+      .collect::<Vec<_>>();
+   let target = one("audio render initial buffer target", &target)?;
+   Ok(PipeWireBuffer { shrink, target })
 }
 
 /// Picks the first matching, relocatable prologue at `func`.
