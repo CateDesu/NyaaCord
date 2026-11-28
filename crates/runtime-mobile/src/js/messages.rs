@@ -1,6 +1,6 @@
 //! `phoenix.commands`, send interceptors and emoji picks.
 
-use phoenix_runtime::js::{Engine, Registry};
+use phoenix_runtime::js::{Engine, Registry, restart_budget};
 use rquickjs::{CatchResultExt, Ctx, Exception, Function, Object, Value};
 
 use crate::{
@@ -72,6 +72,7 @@ pub fn submit(engine: &Engine, text: &str, context: &UiContext) -> Sent {
          .collect::<Vec<_>>();
       drop((core, registry));
       for (plugin, function) in interceptors {
+         restart_budget(&ctx);
          match function
             .call::<_, Value<'_>>((value.clone(), argument.clone()))
             .catch(&ctx)
@@ -111,6 +112,7 @@ pub fn pick_emoji(engine: &Engine, id: &str, context: &UiContext) -> Option<Stri
          .collect::<Vec<_>>();
       drop(registry);
       pickers.into_iter().find_map(|(plugin, function)| {
+         restart_budget(&ctx);
          match function
             .call::<_, Value<'_>>((id, argument.clone()))
             .catch(&ctx)

@@ -7,7 +7,7 @@ use rquickjs::{CatchResultExt, Ctx, Exception, Function, Object, Value};
 
 use crate::{
    discord,
-   js::{Engine, Registry},
+   js::{Engine, Registry, restart_budget},
 };
 
 impl Engine {
@@ -21,7 +21,7 @@ impl Engine {
       path: &str,
       body: &[u8],
    ) -> discord::RequestAction {
-      let action = self.context.with(|ctx| {
+      self.with(|ctx| {
          let Some(registry) = ctx.userdata::<Registry<'_>>() else {
             return discord::RequestAction::Pass;
          };
@@ -42,6 +42,7 @@ impl Engine {
          let mut current_body = String::from_utf8_lossy(body).into_owned();
          let mut changed = false;
          for (plugin, function) in hooks {
+            restart_budget(&ctx);
             let Ok(req) = Object::new(ctx.clone()) else {
                break;
             };
@@ -83,9 +84,7 @@ impl Engine {
          } else {
             discord::RequestAction::Pass
          }
-      });
-      self.drain_and_flush();
-      action
+      })
    }
 
    /// Runs matching `phoenix.discord.onResponse` hooks (sync or async) on an
@@ -107,8 +106,7 @@ impl Engine {
          body,
          done,
       };
-      self.context.with(|ctx| run_response_chain(&ctx, pending));
-      self.drain_and_flush();
+      self.with(|ctx| run_response_chain(&ctx, pending));
    }
 }
 
@@ -186,6 +184,7 @@ fn run_response_chain<'js>(ctx: &Ctx<'js>, mut pending: Pending) {
       if let Ok(json_fn) = json_parser_fn(ctx, body_str) {
          let _ = res_obj.set("json", json_fn);
       }
+      restart_budget(ctx);
       let result = match function.call::<_, Value<'js>>((res_obj,)).catch(ctx) {
          Ok(result) => result,
          Err(err) => {

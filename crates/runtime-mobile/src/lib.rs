@@ -1,6 +1,6 @@
 //! phoenix on Phoenix's mobile clients: the UI-op bridge, the settings pages
 //! and the UI patches. Android adds JNI for HTTP, SQL and the installer, iOS
-//! uses Foundation and a bundled SQLite.
+//! uses Foundation and a bundled `SQLite`.
 
 #![cfg(any(target_os = "android", target_os = "ios"))]
 

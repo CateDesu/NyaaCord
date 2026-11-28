@@ -181,11 +181,7 @@ pub fn sqlite(database: &Path, sql: &str, args: &[String]) -> Result<Rows, Store
    let conn = open(database)?;
    let _ = conn.busy_timeout(Duration::from_secs(3));
    let mut stmt = conn.prepare(sql)?;
-   let columns = stmt
-      .column_names()
-      .into_iter()
-      .map(str::to_owned)
-      .collect::<Vec<_>>();
+   let columns = stmt.column_names().map(str::to_owned).collect::<Vec<_>>();
    let col_count = columns.len();
 
    let mut cursor = stmt.query(params_from_iter(args.iter().map(String::as_str)))?;
@@ -254,5 +250,37 @@ mod tests {
          assert_eq!(database(&files).unwrap(), newest);
       }
       fs::remove_dir_all(&files).unwrap();
+   }
+
+   #[cfg(feature = "sqlite")]
+   #[test]
+   fn sqlite_reads_typed_columns_and_bound_parameters() {
+      let path = std::env::temp_dir().join(format!("phoenix-store-{}.sqlite", std::process::id()));
+      let _ = fs::remove_file(&path);
+      {
+         let conn = Connection::open(&path).expect("create temp db");
+         conn
+            .execute_batch(
+               "CREATE TABLE meta (k TEXT PRIMARY KEY NOT NULL, v BLOB NOT NULL) WITHOUT ROWID;
+                INSERT INTO meta (k, v) VALUES ('me', CAST('{\"id\":\"42\"}' AS BLOB));",
+            )
+            .expect("seed temp db");
+      }
+
+      let rows = sqlite(
+         &path,
+         "SELECT k, v, 7 AS n, 1.5 AS f, NULL AS z FROM meta WHERE k = ?",
+         &["me".to_owned()],
+      )
+      .expect("query temp db");
+      assert_eq!(rows.columns, ["k", "v", "n", "f", "z"]);
+      assert_eq!(rows.rows.len(), 1);
+      assert_eq!(rows.first("k").and_then(Cell::text), Some("me"));
+      assert_eq!(rows.first("v").and_then(Cell::text), Some(r#"{"id":"42"}"#));
+      assert!(matches!(rows.first("n"), Some(Cell::Integer(7))));
+      assert!(matches!(rows.first("f"), Some(Cell::Float(f)) if (*f - 1.5).abs() < f64::EPSILON));
+      assert!(matches!(rows.first("z"), Some(Cell::Null)));
+
+      let _ = fs::remove_file(&path);
    }
 }

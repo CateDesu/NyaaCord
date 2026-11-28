@@ -3,7 +3,8 @@
 //! selected.
 //!
 //! All patches are build-independent anchor lookups run from [`crate::prepare`]
-//! inside `DllMain` before Discord initializes:
+//! via an APC queued by `DllMain` on Windows or the constructor on Linux before
+//! Discord initializes:
 //! 1. Relabel settings page `24` (`Other -> Phoenix`, right above `Log Out`) to
 //!    `Sunbird` by replacing the unique 22-byte `.rdata` string
 //!    `PhoenixDESKTOP_PHOENIX` in-place with `SunbirdDESKTOP_SUNBIRD`.
@@ -61,9 +62,9 @@ pub fn install(image: &Image<'static>) {
 
 fn patch_sidebar_label(image: &Image<'static>) {
    const NEW_NAME: &[u8] = b"Sunbird";
-   const NEW_ID: &[u8] = b"DESKTOP_SUNBIRD";
+   const NEW_ID: &[u8] = b"SUNBIRD";
    const _: () = assert!(NEW_NAME.len() == b"Phoenix".len());
-   const _: () = assert!(NEW_ID.len() == b"DESKTOP_PHOENIX".len());
+   const _: () = assert!(NEW_ID.len() == b"PHOENIX".len());
 
    let label = match desktop::settings_label_parts(image) {
       Ok(label) => label,
@@ -94,7 +95,8 @@ fn patch_page_visibility(image: &Image<'static>) {
    };
    // Tightening `cmp r8d, 0xf` -> `0x0e` excludes page 24 (`24 - 9 = 15`) from
    // the gated switch so `is_page_visible(24)` returns `true` unconditionally.
-   // SAFETY: single-byte immediate patch in `.text` executed from `DllMain`.
+   // SAFETY: single-byte immediate patch in `.text` executed from `prepare`
+   // before Discord threads run.
    match unsafe { image.write_code(limit, &[0x0E]) } {
       Ok(()) => log::info!("desktop settings: page 24 visibility unlocked"),
       Err(err) => log::warn!("desktop settings: visibility patch failed: {err}"),

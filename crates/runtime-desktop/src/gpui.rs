@@ -509,7 +509,8 @@ unsafe extern "C" fn button_callback(
 }
 
 /// Resolves Discord's native GPUI / Mana widget builders from unique string
-/// anchors. Safe to call from `DllMain` (`prepare()`).
+/// anchors. Runs during [`crate::prepare`] from an APC queued by `DllMain` on
+/// Windows or the `.init_array` constructor on Linux.
 pub fn locate(image: &Image<'static>) -> bool {
    if SYMBOLS.get().is_some() {
       return true;
@@ -2008,8 +2009,7 @@ struct UpdateCardRow {
 fn updates_card_state() -> Vec<UpdateCardRow> {
    let can_update =
       phoenix_runtime::platform().is_some_and(<dyn phoenix_runtime::Platform>::updates_loader);
-   let busy = update::busy();
-   let status = update::status();
+   let (busy, status) = update::snapshot();
    let found = update::found();
    build_updates_card_rows(
       update::app_version(),

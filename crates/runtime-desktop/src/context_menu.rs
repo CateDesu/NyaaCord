@@ -226,7 +226,7 @@ fn map_icon(icon: Option<&str>) -> Option<u16> {
    }
 }
 
-/// Locates and hooks `MessageContextMenu` from `DllMain`.
+/// Locates and hooks `MessageContextMenu` during [`crate::prepare`].
 pub fn install(image: &Image<'static>) {
    let menu = match desktop::message_context_menu(image) {
       Ok(menu) => menu,

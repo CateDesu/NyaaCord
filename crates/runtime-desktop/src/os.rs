@@ -144,7 +144,7 @@ mod linux {
       ffi::CStr,
       sync::{
          Mutex, OnceLock, PoisonError,
-         atomic::{AtomicU8, AtomicU64, Ordering},
+         atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
       },
       time::Instant,
    };
@@ -279,6 +279,177 @@ mod linux {
       }
    }
 
+   /// Builds clip pipelines without `vapostproc`, whose frames fail on some VA
+   /// drivers and freeze the clip.
+   fn skip_va_scaler(image: &Image<'static>) {
+      let skip = match desktop::va_scaler_lookup(image) {
+         Ok(skip) => skip,
+         Err(err) => {
+            log::warn!("desktop video: {err}, clips keep vapostproc");
+            return;
+         },
+      };
+      // SAFETY: rewrites one branch to its unconditional form, from `prepare`
+      // before Discord's threads run.
+      match unsafe { image.write_code(skip.at, skip.patch) } {
+         Ok(()) => log::info!("desktop video: skipping vapostproc @ {:#x}", skip.at),
+         Err(err) => log::warn!("desktop video: {err}"),
+      }
+   }
+
+   /// `Option<Rc<dyn PlatformDisplay>>`, `ptr` 0 for `None`.
+   #[repr(C)]
+   #[derive(Clone, Copy)]
+   struct DisplayRc {
+      ptr: usize,
+      vtable: usize,
+   }
+
+   #[repr(C)]
+   struct DisplayVec {
+      cap: usize,
+      ptr: *const DisplayRc,
+      len: usize,
+   }
+
+   type PrimaryDisplayFn = unsafe extern "C" fn(*const u8) -> DisplayRc;
+   type DisplaysFn = unsafe extern "C" fn(*mut DisplayVec, *const u8);
+
+   struct PrimaryDisplay {
+      orig: PrimaryDisplayFn,
+      displays: DisplaysFn,
+   }
+
+   static PRIMARY_DISPLAY: OnceLock<PrimaryDisplay> = OnceLock::new();
+   static FALLBACK_DISPLAY: OnceLock<(usize, usize)> = OnceLock::new();
+   static WARNED_NO_DISPLAYS: AtomicBool = AtomicBool::new(false);
+
+   /// Validates the first element of a `Vec<Rc<dyn PlatformDisplay>>`.
+   ///
+   /// # Safety
+   ///
+   /// `displays` was just initialized by GPUI's `LinuxPlatform::displays`.
+   unsafe fn read_first_display(displays: &DisplayVec) -> Option<(usize, usize)> {
+      if displays.len == 0
+         || displays.cap < displays.len
+         || displays.ptr.is_null()
+         || !displays.ptr.is_aligned()
+      {
+         if !WARNED_NO_DISPLAYS.swap(true, Ordering::Relaxed) {
+            log::warn!("desktop overlay: displays() returned no readable Vec");
+         }
+         return None;
+      }
+      // SAFETY: `len > 0` and `ptr` is aligned; the `Vec` and remaining items
+      // are intentionally leaked once so the cached `Rc` stays alive.
+      let first = unsafe { *displays.ptr };
+      if first.ptr == 0 || first.vtable == 0 || !first.ptr.is_multiple_of(align_of::<usize>()) {
+         if !WARNED_NO_DISPLAYS.swap(true, Ordering::Relaxed) {
+            log::warn!("desktop overlay: displays() returned an invalid display entry");
+         }
+         return None;
+      }
+      log::info!(
+         "desktop overlay: no primary display, using the first of {}",
+         displays.len
+      );
+      Some((first.ptr, first.vtable))
+   }
+
+   /// Clones a cached `Rc<dyn PlatformDisplay>` strong reference on GPUI's main
+   /// thread without allowing strong-count overflow.
+   ///
+   /// # Safety
+   ///
+   /// `ptr` is an aligned `RcBox` kept alive by the cache; main thread only.
+   unsafe fn clone_cached_display(ptr: usize, vtable: usize) -> Option<DisplayRc> {
+      let strong_ptr = ptr as *mut usize;
+      // SAFETY: caller guarantees `ptr` points to a live `RcBox` strong count.
+      let strong = unsafe { *strong_ptr };
+      if strong == 0 || strong >= isize::MAX.cast_unsigned() {
+         return None;
+      }
+      // SAFETY: `strong + 1 <= isize::MAX` cannot overflow.
+      unsafe { *strong_ptr = strong + 1 };
+      Some(DisplayRc { ptr, vtable })
+   }
+
+   /// Wayland has no primary display, which leaves the overlay without one on
+   /// `KWin`, so fall back to the first display.
+   unsafe extern "C" fn primary_display_detour(platform: *const u8) -> DisplayRc {
+      let Some(hook) = PRIMARY_DISPLAY.get() else {
+         return DisplayRc { ptr: 0, vtable: 0 };
+      };
+      if platform.is_null() {
+         return DisplayRc { ptr: 0, vtable: 0 };
+      }
+      // SAFETY: same argument.
+      let primary = unsafe { (hook.orig)(platform) };
+      if primary.ptr != 0 {
+         return primary;
+      }
+      let (ptr, vtable) = if let Some(cached) = FALLBACK_DISPLAY.get().copied() {
+         cached
+      } else {
+         let Some(found) = first_display(hook, platform) else {
+            return primary;
+         };
+         let _ = FALLBACK_DISPLAY.set(found);
+         FALLBACK_DISPLAY.get().copied().unwrap_or(found)
+      };
+      // SAFETY: `FALLBACK_DISPLAY` owns one leaked strong ref; main thread only.
+      unsafe { clone_cached_display(ptr, vtable) }.unwrap_or(primary)
+   }
+
+   fn first_display(hook: &PrimaryDisplay, platform: *const u8) -> Option<(usize, usize)> {
+      let mut displays = DisplayVec {
+         cap: 0,
+         ptr: std::ptr::null(),
+         len: 0,
+      };
+      // SAFETY: same platform.
+      unsafe { (hook.displays)(&raw mut displays, platform) };
+      // SAFETY: `displays` was populated by `hook.displays`.
+      unsafe { read_first_display(&displays) }
+   }
+
+   fn install_primary_display(image: &Image<'static>) {
+      let found = match desktop::linux_primary_display(image) {
+         Ok(found) => found,
+         Err(err) => {
+            log::warn!("desktop overlay: {err}");
+            return;
+         },
+      };
+      let prologue = desktop::LINUX_PRIMARY_DISPLAY_PROLOGUE;
+      // SAFETY: from `prepare`, before Discord's threads run.
+      let trampoline = match unsafe {
+         image.hook_entry(
+            found.primary_display,
+            prologue.pattern,
+            prologue.len,
+            primary_display_detour as *const () as usize,
+         )
+      } {
+         Ok(trampoline) => trampoline,
+         Err(err) => {
+            log::warn!("desktop overlay: {err}");
+            return;
+         },
+      };
+      // SAFETY: located by sigs.
+      let _ = PRIMARY_DISPLAY.set(unsafe {
+         PrimaryDisplay {
+            orig: std::mem::transmute::<usize, PrimaryDisplayFn>(trampoline),
+            displays: std::mem::transmute::<usize, DisplaysFn>(found.displays),
+         }
+      });
+      log::info!(
+         "desktop overlay: hooked primary_display @ {:#x}",
+         found.primary_display
+      );
+   }
+
    pub struct Linux;
 
    impl DesktopOs for Linux {
@@ -287,6 +458,8 @@ mod linux {
             Ok(()) => log::info!("process name: set to {}", PROCESS_NAME.to_string_lossy()),
             Err(err) => log::warn!("process name: {err}"),
          }
+         skip_va_scaler(image);
+         install_primary_display(image);
          let found = match desktop::wayland_frame(image) {
             Ok(found) => found,
             Err(err) => {
@@ -380,6 +553,45 @@ mod linux {
 
          assert_eq!(thread_comm.trim_end_matches('\n'), "NyaaCord");
          assert_eq!(main_before, main_after);
+      }
+
+      #[test]
+      fn fallback_display_validates_entries_and_refcount_bounds() {
+         let empty = DisplayVec {
+            cap: 0,
+            ptr: std::ptr::dangling(),
+            len: 0,
+         };
+         assert_eq!(unsafe { read_first_display(&empty) }, None);
+
+         let invalid = DisplayRc { ptr: 0, vtable: 16 };
+         let bad_vec = DisplayVec {
+            cap: 1,
+            ptr: &raw const invalid,
+            len: 1,
+         };
+         assert_eq!(unsafe { read_first_display(&bad_vec) }, None);
+
+         let mut rc_box = [1usize, 1usize];
+         let valid = DisplayRc {
+            ptr: rc_box.as_mut_ptr().addr(),
+            vtable: 0x1000,
+         };
+         let ok_vec = DisplayVec {
+            cap: 1,
+            ptr: &raw const valid,
+            len: 1,
+         };
+         let (ptr, vtable) = unsafe { read_first_display(&ok_vec) }.expect("valid display");
+         assert_eq!((ptr, vtable), (valid.ptr, valid.vtable));
+
+         let cloned = unsafe { clone_cached_display(ptr, vtable) }.expect("cloned display");
+         assert_eq!((cloned.ptr, cloned.vtable), (ptr, vtable));
+         assert_eq!(rc_box[0], 2);
+
+         rc_box[0] = isize::MAX.cast_unsigned();
+         assert!(unsafe { clone_cached_display(ptr, vtable) }.is_none());
+         assert_eq!(rc_box[0], isize::MAX.cast_unsigned());
       }
    }
 }

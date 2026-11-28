@@ -81,8 +81,7 @@ pub fn main_sections(plugins: &[PluginInfo]) -> Vec<Tree> {
 
 fn update_section() -> Option<Tree> {
    let update_found = phoenix_runtime::update::found();
-   let update_status = phoenix_runtime::update::status();
-   let update_busy = phoenix_runtime::update::busy();
+   let (update_busy, update_status) = phoenix_runtime::update::snapshot();
    (update_found.is_some() || update_status.is_some()).then(|| {
       let mut update_rows = Vec::new();
       if let Some(update) = &update_found {

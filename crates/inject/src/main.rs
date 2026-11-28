@@ -15,6 +15,9 @@
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+#[cfg(windows)]
+mod shortcuts;
+
 use std::{
    ffi::{OsStr, OsString},
    path::{Path, PathBuf},
@@ -389,6 +392,51 @@ fn build_windows_cmdline(exe: &Path, args: &[OsString]) -> String {
       line.push_str(&quote_windows_arg(arg, false));
    }
    line
+}
+
+/// Builds `SUNBIRD_RESTART_ARGS` for GPUI's Windows restart script, ending with
+/// `--` so Discord's own restart arguments follow verbatim.
+#[cfg_attr(
+   not(any(windows, test)),
+   allow(
+      dead_code,
+      reason = "used by Windows Ctrl+R restart env and cross-platform tests"
+   )
+)]
+fn build_restart_args(
+   quiet: bool,
+   no_runtime: bool,
+   target_exe: Option<&Path>,
+   explicit_dll: Option<&Path>,
+) -> String {
+   let mut parts: Vec<String> = Vec::new();
+   if quiet {
+      parts.push("--quiet".to_owned());
+   }
+   if no_runtime {
+      parts.push("--no-runtime".to_owned());
+   }
+   if let Some(exe) = target_exe {
+      parts.push("--target-exe".to_owned());
+      parts.push(quote_windows_arg(exe.as_os_str(), true));
+   }
+   if let Some(dll) = explicit_dll {
+      parts.push(quote_windows_arg(dll.as_os_str(), true));
+   }
+   parts.push("--".to_owned());
+   parts.join(" ")
+}
+
+/// Reports whether this launcher was re-invoked by GPUI's Windows Ctrl+R restart script.
+#[cfg_attr(
+   not(any(windows, test)),
+   allow(
+      dead_code,
+      reason = "used by Windows Ctrl+R restart detection and cross-platform tests"
+   )
+)]
+fn is_restart_relaunch_for(me: &Path, restart_exe: Option<&OsStr>) -> bool {
+   restart_exe.is_some_and(|val| !val.is_empty() && paths_equal(me, Path::new(val)))
 }
 
 #[cfg(windows)]
@@ -1871,7 +1919,7 @@ mod windows {
       ffi::{OsStr, OsString, c_void},
       fs,
       io::{self, Write},
-      os::windows::{ffi::OsStrExt, process::CommandExt},
+      os::windows::ffi::OsStrExt,
       path::{Path, PathBuf},
       process::Command,
       ptr,
@@ -1891,11 +1939,12 @@ mod windows {
 
    use super::{
       ClientTransaction, InstalledAction, LockedUpdateAction, ManualUpdatePrecheck, Mode, USAGE,
-      VERSION, acquire_install_lock, begin_bundled_client_sync_locked, build_windows_cmdline,
-      decide_installed_action, decide_locked_manual_update, discord_match_paths,
+      VERSION, acquire_install_lock, begin_bundled_client_sync_locked, build_restart_args,
+      build_windows_cmdline, decide_installed_action, decide_locked_manual_update,
+      discord_match_paths,
       embedded::{EMBEDDED_DLL, EMBEDDED_PLUGINS},
-      install_home_in, installed_version_unknown_error, plan_manual_update,
-      resolve_discord_exe_with, run_installed_action, validate_bundled_client,
+      install_home_in, installed_version_unknown_error, is_restart_relaunch_for,
+      plan_manual_update, resolve_discord_exe_with, run_installed_action, validate_bundled_client,
    };
 
    type Handle = *mut c_void;
@@ -1911,7 +1960,6 @@ mod windows {
    const CREATE_SUSPENDED: u32 = 0x4;
    const MEM_COMMIT_RESERVE: u32 = 0x3000;
    const PAGE_READWRITE: u32 = 0x4;
-   const NO_WINDOW: u32 = 0x0800_0000;
    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
    const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5;
    const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4;
@@ -2048,14 +2096,6 @@ mod windows {
             kind,
          )
       }
-   }
-
-   /// A program in System32, by full path: `Command` looks beside this
-   /// launcher first, which may be the Downloads folder on the first run.
-   fn system32(program: &str) -> PathBuf {
-      PathBuf::from(env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()))
-         .join("System32")
-         .join(program)
    }
 
    fn wide(text: impl AsRef<OsStr>) -> Vec<u16> {
@@ -2317,38 +2357,9 @@ mod windows {
       ))
    }
 
-   /// Refreshes Start Menu and Desktop shortcuts with the installed launcher spelling.
-   fn shortcuts(launcher: &Path, remove: bool) -> misstep::Result<()> {
-      let script = format!(
-         "$ErrorActionPreference = 'Stop'; $w = New-Object -ComObject WScript.Shell; \
-          foreach ($dir in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'))) {{ \
-             if (-not $dir) {{ continue }}; \
-             $legacy = Join-Path $dir 'Sunbird.lnk'; \
-             if (Test-Path -LiteralPath $legacy) {{ Remove-Item -LiteralPath $legacy }}; \
-             $p = Join-Path $dir 'NyaaCord.lnk'; \
-             if (Test-Path -LiteralPath $p) {{ Remove-Item -LiteralPath $p -ErrorAction Stop }}; \
-             if (${remove}) {{ continue }}; \
-             $s = $w.CreateShortcut($p); \
-             $s.TargetPath = $env:NC_TARGET; \
-             $s.IconLocation = $env:NC_TARGET + ',0'; \
-             $s.Description = 'NyaaCord for Discord Phoenix'; \
-             $s.Save() \
-          }}"
-      );
-      let status = Command::new(system32(r"WindowsPowerShell\v1.0\powershell.exe"))
-         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-         .env("NC_TARGET", launcher)
-         .creation_flags(NO_WINDOW)
-         .status()
-         .context("running powershell.exe")?;
-      if !status.success() {
-         bail!("updating NyaaCord shortcuts failed");
-      }
-      Ok(())
-   }
-
+   /// Refreshes or removes Start Menu and Desktop shortcuts via Shell COM.
    fn refresh_shortcuts(launcher: &Path, remove: bool) {
-      if let Err(err) = shortcuts(launcher, remove) {
+      if let Err(err) = crate::shortcuts::sync(launcher, remove) {
          let _ = writeln!(io::stderr(), "Could not update NyaaCord shortcuts: {err}");
       }
    }
@@ -2681,6 +2692,16 @@ mod windows {
       Ok(())
    }
 
+   fn is_restart_relaunch() -> bool {
+      let Some(restart_exe) = env::var_os("SUNBIRD_RESTART_EXE") else {
+         return false;
+      };
+      let Ok(me) = env::current_exe() else {
+         return false;
+      };
+      is_restart_relaunch_for(&me, Some(restart_exe.as_os_str()))
+   }
+
    /// Checks for and applies an update before normal launch under `UpdateLock`,
    /// rolling back if the new binary fails its version smoke check or fails to spawn.
    fn maybe_auto_update(
@@ -2692,7 +2713,9 @@ mod windows {
       discord_args: &[OsString],
       quiet: bool,
    ) -> bool {
-      if env::var("NYAACORD_AUTO_UPDATE").is_ok_and(|val| val.trim() == "0") {
+      if env::var("NYAACORD_AUTO_UPDATE").is_ok_and(|val| val.trim() == "0")
+         || is_restart_relaunch()
+      {
          return false;
       }
       let Ok(mut cfg) = Config::from_env() else {
@@ -3074,9 +3097,28 @@ mod windows {
       Ok(Some((launcher, dll, bundled_exe)))
    }
 
+   fn set_restart_env(
+      launcher: &Path,
+      quiet: bool,
+      no_runtime: bool,
+      target_exe: Option<&Path>,
+      explicit_dll: Option<&Path>,
+   ) {
+      let restart_args = build_restart_args(quiet, no_runtime, target_exe, explicit_dll);
+      // SAFETY: launcher is single-threaded here; Discord and its Ctrl+R restart script
+      // inherit these variables with the rest of the environment.
+      unsafe {
+         env::set_var("SUNBIRD_RESTART_EXE", launcher);
+         env::set_var("SUNBIRD_RESTART_ARGS", restart_args);
+         if no_runtime {
+            env::set_var("SUNBIRD_GATE_ONLY", "1");
+         }
+      }
+   }
+
    fn cmd_launch(
       explicit_dll: Option<PathBuf>,
-      target_exe: Option<PathBuf>,
+      target_exe: Option<&Path>,
       no_runtime: bool,
       discord_args: &[OsString],
       ui: &Ui,
@@ -3087,6 +3129,9 @@ mod windows {
       let env_discord = env::var_os("NYAACORD_DISCORD_EXE");
       let explicit_target =
          target_exe.is_some() || env_discord.as_deref().is_some_and(|val| !val.is_empty());
+      let restart_explicit_dll = explicit_dll
+         .as_deref()
+         .map(|path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
 
       let (managed_exe, dll, bundled_exe) = if let Some(path) = explicit_dll {
          (None, path, None)
@@ -3095,7 +3140,7 @@ mod windows {
             &home,
             &me,
             explicit_target,
-            target_exe.as_deref(),
+            target_exe,
             no_runtime,
             discord_args,
             ui.quiet,
@@ -3106,7 +3151,12 @@ mod windows {
          (Some(launcher), dll, bundled_exe)
       };
 
-      let exe = resolve_discord_exe_with(target_exe, env_discord, bundled_exe, &local);
+      let exe = resolve_discord_exe_with(
+         target_exe.map(Path::to_path_buf),
+         env_discord,
+         bundled_exe,
+         &local,
+      );
       if !exe.is_file() {
          bail!(
             "Discord Phoenix is not installed at {}. Download the full NyaaCord executable or pass --target-exe.",
@@ -3141,16 +3191,26 @@ mod windows {
          return Ok(());
       }
 
-      if let Some(launcher) = managed_exe {
+      let restart_exe = managed_exe
+         .as_deref()
+         .filter(|path| path.is_file())
+         .unwrap_or(&me);
+      let restart_target_exe =
+         target_exe.map(|path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
+
+      if let Some(launcher) = managed_exe.as_deref() {
          // SAFETY: launcher is single-threaded here; child `Discord.exe` inherits this path.
-         unsafe { env::set_var("NYAACORD_MANAGED_EXE", &launcher) };
+         unsafe { env::set_var("NYAACORD_MANAGED_EXE", launcher) };
       }
       // SAFETY: launcher is single-threaded here; child `Discord.exe` inherits this version.
       unsafe { env::set_var("NYAACORD_VERSION", VERSION) };
-      if no_runtime {
-         // SAFETY: launcher is single-threaded here; child opens only the access gate.
-         unsafe { env::set_var("SUNBIRD_GATE_ONLY", "1") };
-      }
+      set_restart_env(
+         restart_exe,
+         ui.quiet,
+         no_runtime,
+         restart_target_exe.as_deref(),
+         restart_explicit_dll.as_deref(),
+      );
 
       let pid = spawn_injected_discord(&exe, &app, &dll, discord_args)?;
       ui.info(&format!(
@@ -3211,7 +3271,13 @@ mod windows {
             target_exe,
             no_runtime,
             discord_args,
-         } => cmd_launch(explicit_dll, target_exe, no_runtime, &discord_args, ui),
+         } => cmd_launch(
+            explicit_dll,
+            target_exe.as_deref(),
+            no_runtime,
+            &discord_args,
+            ui,
+         ),
       }
    }
 }
@@ -3338,6 +3404,138 @@ mod tests {
          cmdline,
          r#""C:\Program Files\Discord Phoenix\Discord.exe" --flag "arg with spaces" "say \"hello\"" "C:\trailing slash\\" """#
       );
+   }
+
+   /// Splits a Windows command line according to MSVCRT / `CommandLineToArgvW` rules.
+   fn split_windows_cmdline(cmdline: &str) -> Vec<OsString> {
+      let mut out = Vec::new();
+      let chars: Vec<char> = cmdline.chars().collect();
+      let mut i = 0;
+      while i < chars.len() {
+         while i < chars.len() && matches!(chars[i], ' ' | '\t') {
+            i += 1;
+         }
+         if i >= chars.len() {
+            break;
+         }
+         let mut arg = String::new();
+         let mut in_quotes = false;
+         while i < chars.len() {
+            if !in_quotes && matches!(chars[i], ' ' | '\t') {
+               break;
+            }
+            if chars[i] == '\\' {
+               let start = i;
+               while i < chars.len() && chars[i] == '\\' {
+                  i += 1;
+               }
+               let slashes = i - start;
+               if i < chars.len() && chars[i] == '"' {
+                  for _ in 0..slashes / 2 {
+                     arg.push('\\');
+                  }
+                  if slashes % 2 == 1 {
+                     arg.push('"');
+                  } else {
+                     in_quotes = !in_quotes;
+                  }
+                  i += 1;
+               } else {
+                  for _ in 0..slashes {
+                     arg.push('\\');
+                  }
+               }
+            } else if chars[i] == '"' {
+               in_quotes = !in_quotes;
+               i += 1;
+            } else {
+               arg.push(chars[i]);
+               i += 1;
+            }
+         }
+         out.push(OsString::from(arg));
+      }
+      out
+   }
+
+   #[test]
+   fn builds_windows_restart_args_for_relaunch() {
+      assert_eq!(build_restart_args(false, false, None, None), "--");
+      assert_eq!(
+         build_restart_args(true, true, None, None),
+         "--quiet --no-runtime --"
+      );
+      assert_eq!(
+         build_restart_args(
+            false,
+            true,
+            Some(Path::new(r"C:\My Discord\Discord.exe")),
+            Some(Path::new(r"C:\dev build\phoenix.dll")),
+         ),
+         r#"--no-runtime --target-exe "C:\My Discord\Discord.exe" "C:\dev build\phoenix.dll" --"#
+      );
+      assert_eq!(
+         build_restart_args(
+            false,
+            false,
+            None,
+            Some(Path::new(r"C:\a b\phoenix.dll")),
+         ),
+         r#""C:\a b\phoenix.dll" --"#
+      );
+
+      // Simulate PowerShell's `"$env:SUNBIRD_RESTART_ARGS $arguments"` across repeated Ctrl+R reloads.
+      let tricky_exe = Path::new(r"C:\Users\Alice & Bob's (1) $x\Discord\Discord.exe");
+      let tricky_dll = Path::new(r"C:\Users\Alice & Bob's (1) $x\dev\phoenix.dll");
+      let restart_args = build_restart_args(true, true, Some(tricky_exe), Some(tricky_dll));
+      let combined = format!(r#"{restart_args} --start-minimized --url="discord://a b""#);
+      let reparsed = parse_args(split_windows_cmdline(&combined)).expect("reparse restart");
+      assert_eq!(
+         reparsed,
+         CliOptions {
+            mode: Mode::Launch {
+               explicit_dll: Some(tricky_dll.to_path_buf()),
+               target_exe: Some(tricky_exe.to_path_buf()),
+               no_runtime: true,
+               discord_args: os_args(&["--start-minimized", "--url=discord://a b"]),
+            },
+            quiet: true,
+         }
+      );
+      let Mode::Launch {
+         explicit_dll,
+         target_exe,
+         no_runtime,
+         ..
+      } = reparsed.mode
+      else {
+         panic!("expected launch mode");
+      };
+      assert_eq!(
+         build_restart_args(
+            reparsed.quiet,
+            no_runtime,
+            target_exe.as_deref(),
+            explicit_dll.as_deref(),
+         ),
+         restart_args
+      );
+   }
+
+   #[test]
+   fn detects_restart_relaunch_only_for_matching_launcher() {
+      let installed = Path::new("/tmp/NyaaCord/NyaaCord.exe");
+      let downloaded = Path::new("/tmp/Downloads/NyaaCord-x86_64.exe");
+      assert!(is_restart_relaunch_for(
+         installed,
+         Some(installed.as_os_str())
+      ));
+      assert!(!is_restart_relaunch_for(
+         downloaded,
+         Some(installed.as_os_str())
+      ));
+      assert!(!is_restart_relaunch_for(installed, Some(OsStr::new(""))));
+      assert!(!is_restart_relaunch_for(installed, None));
    }
 
    fn build_fake_pe64(cert_bytes: Option<&[u8]>, overlay: &[u8]) -> Vec<u8> {

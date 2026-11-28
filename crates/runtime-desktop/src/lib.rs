@@ -15,6 +15,8 @@ mod js;
 mod message;
 mod modal;
 mod os;
+#[cfg(any(windows, test))]
+mod restart;
 mod settings;
 mod staff;
 mod tray;
@@ -71,8 +73,8 @@ struct DialogAnswer {
 /// The target and its swapped gateway registry, once [`prepare`] hooked them.
 static PREPARED: Mutex<Option<(Image<'static>, &'static GatewayRegistry)>> = Mutex::new(None);
 
-/// Hooks Discord from `DllMain` on Windows or the `.init_array` constructor on
-/// Linux, before its own code runs.
+/// Hooks Discord from an APC queued by `DllMain` on Windows or the
+/// `.init_array` constructor on Linux, before its own code runs.
 ///
 /// Desktop Phoenix settles on the access gate in its first frames and stops
 /// reading the gateway registry and HTTP vtables once started, so hooks swapped
@@ -82,6 +84,8 @@ pub fn prepare() -> Result<(), Error> {
    phoenix_runtime::set_platform(&Desktop);
    let image = phoenix_runtime::target()?;
    open_access_gate(&image);
+   #[cfg(windows)]
+   restart::install(&image);
    #[cfg(target_os = "linux")]
    tune_pipewire(&image);
    staff::prepare(&image);
@@ -134,7 +138,10 @@ fn tune_pipewire(image: &Image<'static>) {
 /// without `NyaaCord`. For telling Discord's own behaviour from ours.
 pub fn open_gate_only() -> Result<(), Error> {
    phoenix_runtime::set_platform(&Desktop);
-   open_access_gate(&phoenix_runtime::target()?);
+   let image = phoenix_runtime::target()?;
+   open_access_gate(&image);
+   #[cfg(windows)]
+   restart::install(&image);
    Ok(())
 }
 
@@ -169,8 +176,8 @@ fn open_access_gate(image: &Image<'static>) {
 
    match phoenix_sigs::desktop::access_gate(image) {
       Ok(access) => {
-         // SAFETY: Discord's own code, written from `DllMain` or the
-         // constructor before it runs.
+         // SAFETY: Discord's own code, written from an APC queued by `DllMain`
+         // or the constructor before it runs.
          match unsafe { image.write_code(access, &GATE_ALLOWED) } {
             Ok(()) => log::info!("access gate: open"),
             Err(err) => log::error!("access gate: {err}"),
@@ -181,8 +188,8 @@ fn open_access_gate(image: &Image<'static>) {
 
    match phoenix_sigs::desktop::access_evaluator(image) {
       Ok(eval) => {
-         // SAFETY: Discord's own code, written from `DllMain` or the
-         // constructor before it runs.
+         // SAFETY: Discord's own code, written from an APC queued by `DllMain`
+         // or the constructor before it runs.
          match unsafe { image.write_code(eval, &EVALUATOR_ALLOWED) } {
             Ok(()) => log::info!("access evaluator: open"),
             Err(err) => log::error!("access evaluator: {err}"),

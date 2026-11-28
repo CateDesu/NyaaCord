@@ -108,6 +108,33 @@ pub struct Plugin {
    pub source: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PluginState {
+   Off,
+   On,
+   /// On, and its last load threw.
+   Failed(String),
+}
+
+impl PluginState {
+   const fn from_switch(on: bool) -> Self {
+      if on { Self::On } else { Self::Off }
+   }
+
+   #[must_use]
+   pub const fn is_on(&self) -> bool {
+      !matches!(self, Self::Off)
+   }
+
+   #[must_use]
+   pub fn error(&self) -> Option<&str> {
+      match self {
+         Self::Failed(error) => Some(error),
+         Self::Off | Self::On => None,
+      }
+   }
+}
+
 /// A plugin as the settings page shows it.
 #[derive(Clone, Debug)]
 pub struct PluginInfo {
@@ -143,6 +170,7 @@ pub struct Header {
 impl From<&str> for Header {
    fn from(source: &str) -> Self {
       let mut header = Self::default();
+      let source = source.strip_prefix('\u{FEFF}').unwrap_or(source);
       for line in source
          .lines()
          .map(str::trim)
@@ -169,6 +197,55 @@ impl From<&str> for Header {
       }
       header
    }
+}
+
+fn parse_version(raw: &str) -> Option<Vec<u64>> {
+   let trimmed = raw.trim();
+   let body = trimmed
+      .strip_prefix('v')
+      .or_else(|| trimmed.strip_prefix('V'))
+      .unwrap_or(trimmed);
+   if body.is_empty() {
+      return None;
+   }
+   body
+      .split('.')
+      .map(|part| {
+         if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+         }
+         part.parse::<u64>().ok()
+      })
+      .collect()
+}
+
+/// Compares two dotted numeric versions such as `1.0.0` and `2.0.0`.
+///
+/// Accepts an optional leading `v` and pads differing segment counts with zero.
+/// Returns `None` if either string is empty or not strictly numeric.
+#[must_use]
+pub fn compare_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+   let left = parse_version(left)?;
+   let right = parse_version(right)?;
+   let len = left.len().max(right.len());
+   for idx in 0..len {
+      let a = left.get(idx).copied().unwrap_or(0);
+      let b = right.get(idx).copied().unwrap_or(0);
+      match a.cmp(&b) {
+         std::cmp::Ordering::Equal => {},
+         ord => return Some(ord),
+      }
+   }
+   Some(std::cmp::Ordering::Equal)
+}
+
+/// Checks whether two plugin sources are identical after ignoring a leading
+/// UTF-8 BOM and CRLF line ending differences.
+#[must_use]
+pub(crate) fn same_plugin_source(left: &str, right: &str) -> bool {
+   let left = left.strip_prefix('\u{FEFF}').unwrap_or(left);
+   let right = right.strip_prefix('\u{FEFF}').unwrap_or(right);
+   left == right || left.replace("\r\n", "\n") == right.replace("\r\n", "\n")
 }
 
 /// A plugin setting as the user currently has it.
@@ -565,14 +642,38 @@ pub fn validate_plugin_source(source: &str) -> Result<(), Error> {
    Ok(())
 }
 
+#[cfg(test)]
 fn write_validated_source(plugins_dir: &Path, name: &str, source: &str) -> Result<(), Error> {
    validate_plugin_source(source)?;
+   write_source_file(plugins_dir, name, source)
+}
+
+fn write_source_file(plugins_dir: &Path, name: &str, source: &str) -> Result<(), Error> {
    let file = plugins_dir.join(format!("{name}.js"));
    let write = || {
       std::fs::create_dir_all(plugins_dir)?;
       std::fs::write(&file, source)
    };
    write().map_err(io_error(&file))
+}
+
+/// Persists `source` to `plugins_dir/<name>.js`, or removes any redundant disk
+/// override when `source` matches `bundled`.
+fn persist_plugin_file(
+   plugins_dir: &Path,
+   name: &str,
+   source: &str,
+   bundled: Option<&str>,
+) -> Result<(), Error> {
+   if bundled.is_some_and(|bundled| same_plugin_source(source, bundled)) {
+      let file = plugins_dir.join(format!("{name}.js"));
+      return match std::fs::remove_file(&file) {
+         Ok(()) => Ok(()),
+         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+         Err(err) => Err(io_error(&file)(err)),
+      };
+   }
+   write_source_file(plugins_dir, name, source)
 }
 
 /// Downloads a plugin bundle into `home/plugins` and loads it, replacing a
@@ -610,6 +711,9 @@ pub fn install_file(file: &str, bytes: Vec<u8>) -> Result<String, Error> {
 
 /// Validates and writes `source` to `home/plugins/<name>.js` and loads it,
 /// replacing the plugin's code, bundled or not.
+///
+/// Saving source identical to the bundled copy removes any redundant override
+/// file instead of shadowing it.
 pub fn save_source(name: &str, source: String) -> Result<(), Error> {
    let source = if source.starts_with('\u{FEFF}') {
       source['\u{FEFF}'.len_utf8()..].to_owned()
@@ -617,9 +721,14 @@ pub fn save_source(name: &str, source: String) -> Result<(), Error> {
       source
    };
    let state = STATE.get().ok_or(Error::NotStarted)?;
-   write_validated_source(&state.plugins_dir(), name, &source)?;
+   validate_plugin_source(&source)?;
+   let plugins_dir = state.plugins_dir();
    if let Some(mut engine) = engine() {
+      let bundled = engine.bundled_source(name);
+      persist_plugin_file(&plugins_dir, name, &source, bundled.as_deref())?;
       engine.install(name, source);
+   } else {
+      write_source_file(&plugins_dir, name, &source)?;
    }
    Ok(())
 }
@@ -628,6 +737,12 @@ pub fn save_source(name: &str, source: String) -> Result<(), Error> {
 #[must_use]
 pub fn source(name: &str) -> Option<String> {
    engine()?.source(name)
+}
+
+/// The bundled source shipped with this build for `name`, if any.
+#[must_use]
+pub fn bundled_source(name: &str) -> Option<String> {
+   engine()?.bundled_source(name)
 }
 
 /// Deletes a plugin installed into `home/plugins`, restoring the bundled copy
@@ -888,6 +1003,81 @@ mod tests {
       let err = write_validated_source(&dir, "demo", "function broken( {");
       assert!(matches!(err, Err(Error::InvalidPlugin { .. })));
       assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+
+      let _ = std::fs::remove_dir_all(&dir);
+   }
+
+   #[test]
+   fn parses_header_directives_with_utf8_bom() {
+      let header = Header::from(
+         "\u{FEFF}// @description Demo\n// @version 1.2.3\n// @author Cate\n// @enabled false\nconst x = 1;",
+      );
+      assert_eq!(header.description.as_deref(), Some("Demo"));
+      assert_eq!(header.version.as_deref(), Some("1.2.3"));
+      assert_eq!(header.author.as_deref(), Some("Cate"));
+      assert!(header.default_off);
+   }
+
+   #[test]
+   fn compares_dotted_numeric_versions_safely() {
+      use std::cmp::Ordering;
+
+      assert_eq!(compare_versions("1.0.0", "2.0.0"), Some(Ordering::Less));
+      assert_eq!(compare_versions("0.1.2", "0.1.3"), Some(Ordering::Less));
+      assert_eq!(compare_versions("1.10.0", "1.2.0"), Some(Ordering::Greater));
+      assert_eq!(compare_versions("v1.2", "1.2.0"), Some(Ordering::Equal));
+      assert_eq!(compare_versions("V2.0.0", "2.0"), Some(Ordering::Equal));
+      assert_eq!(compare_versions(" 1.2.0 ", "1.2.1"), Some(Ordering::Less));
+
+      for (left, right) in [
+         ("", "1.0.0"),
+         ("1.0.0", ""),
+         ("v", "1.0.0"),
+         ("1..0", "1.0.0"),
+         ("+1.0.0", "1.0.0"),
+         ("1.0.0-beta", "1.0.0"),
+         ("dev", "1.0.0"),
+      ] {
+         assert_eq!(
+            compare_versions(left, right),
+            None,
+            "expected ({left:?}, {right:?}) to be unparseable"
+         );
+      }
+
+      assert!(same_plugin_source("const a = 1;\n", "const a = 1;\n"));
+      assert!(same_plugin_source(
+         "\u{FEFF}const a = 1;\r\nconst b = 2;\r\n",
+         "const a = 1;\nconst b = 2;\n"
+      ));
+      assert!(!same_plugin_source("const a = 1;\n", "const a = 2;\n"));
+   }
+
+   #[test]
+   fn persist_plugin_file_avoids_shadowing_bundled_source() {
+      let dir = std::env::temp_dir().join(format!("nyaacord-persist-test-{}", std::process::id()));
+      let _ = std::fs::remove_dir_all(&dir);
+      let bundled = "// @version 2.0.0\nconst x = 1;\n";
+      let edited = "// @version 2.0.0\nconst x = 2;\n";
+      let file = dir.join("demo.js");
+
+      // Saving bundled-identical source does not create a shadow file.
+      persist_plugin_file(&dir, "demo", bundled, Some(bundled)).expect("no-op save");
+      assert!(!file.exists());
+
+      // Saving edited source creates the override file.
+      persist_plugin_file(&dir, "demo", edited, Some(bundled)).expect("write edit");
+      assert_eq!(std::fs::read_to_string(&file).unwrap(), edited);
+
+      // Reverting back to bundled source removes the redundant override file.
+      persist_plugin_file(
+         &dir,
+         "demo",
+         &bundled.replace('\n', "\r\n"),
+         Some(bundled),
+      )
+      .expect("revert to bundled");
+      assert!(!file.exists());
 
       let _ = std::fs::remove_dir_all(&dir);
    }

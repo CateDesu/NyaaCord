@@ -18,11 +18,15 @@ use phoenix_runtime::{
    js::{
       Engine, Registry,
       background::{Settlement, in_background},
+      restart_budget,
    },
    local,
    store::{self, Cell},
 };
-use rquickjs::{Array, CatchResultExt, Ctx, Exception, Function, Object, Value, function::Opt};
+use rquickjs::{
+   Array, CatchResultExt, Ctx, Exception, Function, Object, Value,
+   function::{Opt, This},
+};
 use serde_json::value::RawValue;
 
 use crate::{
@@ -143,7 +147,11 @@ fn parse_rendered(value: &Value<'_>, priority: i32) -> Option<RenderedAccessory>
    None
 }
 
-fn evaluate_accessories_in_ctx<'js>(ctx: &Ctx<'js>, message_id: u64) -> Vec<RenderedAccessory> {
+fn evaluate_accessories_in_ctx<'js>(
+   ctx: &Ctx<'js>,
+   message_id: u64,
+   epoch: u64,
+) -> Vec<RenderedAccessory> {
    let Some(registry) = ctx.userdata::<Desktop<'js>>() else {
       return Vec::new();
    };
@@ -166,23 +174,43 @@ fn evaluate_accessories_in_ctx<'js>(ctx: &Ctx<'js>, message_id: u64) -> Vec<Rend
 
    let mut out = Vec::new();
    for acc in snapshot {
+      restart_budget(ctx);
       match acc.render.call::<_, Value<'_>>((arg.clone(),)).catch(ctx) {
          Ok(val) if val.is_promise() => {
             if let Some(promise) = val.as_object()
                && let Ok(then) = promise.get::<_, Function<'_>>("then")
             {
                let mid = message_id;
+               let acc_id = acc.id;
                let prio = acc.priority;
-               if let Ok(on_resolve) =
+               let err_plugin = acc.plugin.clone();
+               let on_resolve =
                   Function::new(ctx.clone(), move |ctx: Ctx<'js>, resolved: Value<'js>| {
+                     let active = ctx.userdata::<Desktop<'js>>().is_some_and(|registry| {
+                        registry
+                           .accessories
+                           .borrow()
+                           .iter()
+                           .any(|entry| entry.id == acc_id)
+                     });
+                     if !active {
+                        return;
+                     }
                      if let Some(item) = parse_rendered(&resolved, prio) {
                         let mut all = evaluate_sync_only(&ctx, mid, Some((prio, item)));
                         all.sort_by_key(|a| a.priority);
-                        accessories::set_rendered(mid, all);
+                        accessories::set_rendered_for_epoch(mid, epoch, all);
                      }
-                  })
+                  });
+               let on_reject = Function::new(ctx.clone(), move |reason: Value<'js>| {
+                  log::error!("[{err_plugin}] addMessageAccessory promise: {reason:?}");
+               });
+               if let (Ok(on_resolve), Ok(on_reject)) = (on_resolve, on_reject)
+                  && let Err(err) = then
+                     .call::<_, Value<'_>>((This(promise.clone()), on_resolve, on_reject))
+                     .catch(ctx)
                {
-                  let _ = then.call::<_, Value<'_>>((on_resolve,));
+                  log::error!("[{}] addMessageAccessory promise: {err}", acc.plugin);
                }
             }
          },
@@ -223,20 +251,25 @@ fn evaluate_sync_only<'js>(
    let _ = arg.set("currentUserId", Value::new_null(ctx.clone()));
 
    for acc in snapshot {
-      if let Ok(val) = acc.render.call::<_, Value<'_>>((arg.clone(),)).catch(ctx)
-         && !val.is_promise()
-         && let Some(rendered) = parse_rendered(&val, acc.priority)
-         && !out.contains(&rendered)
-      {
-         out.push(rendered);
+      restart_budget(ctx);
+      match acc.render.call::<_, Value<'_>>((arg.clone(),)).catch(ctx) {
+         Ok(val)
+            if !val.is_promise()
+               && let Some(rendered) = parse_rendered(&val, acc.priority)
+               && !out.contains(&rendered) =>
+         {
+            out.push(rendered);
+         },
+         Ok(_) => {},
+         Err(err) => log::error!("[{}] addMessageAccessory render: {err}", acc.plugin),
       }
    }
    out
 }
 
 /// Evaluates every registered desktop `addMessageAccessory` for `message_id`.
-pub fn render_accessories(engine: &Engine, message_id: u64) -> Vec<RenderedAccessory> {
-   engine.with(|ctx| evaluate_accessories_in_ctx(&ctx, message_id))
+pub fn render_accessories(engine: &Engine, message_id: u64, epoch: u64) -> Vec<RenderedAccessory> {
+   engine.with(|ctx| evaluate_accessories_in_ctx(&ctx, message_id, epoch))
 }
 
 #[expect(
@@ -288,7 +321,8 @@ fn add_message_accessory<'js>(
       "update",
       Function::new(ctx.clone(), |ctx: Ctx<'js>, message_id: Opt<String>| {
          if let Some(mid) = message_id.0.and_then(|s| s.parse::<u64>().ok()) {
-            let items = evaluate_accessories_in_ctx(&ctx, mid);
+            let epoch = accessories::cache_epoch();
+            let items = evaluate_accessories_in_ctx(&ctx, mid, epoch);
             accessories::set_rendered(mid, items);
          } else {
             accessories::clear_cache();
@@ -393,6 +427,7 @@ pub fn check_action_visible(
       let Ok(arg) = build_message_context(&ctx, message_id, channel_id, true) else {
          return true;
       };
+      restart_budget(&ctx);
       match visible.call::<_, Value<'_>>((arg,)).catch(&ctx) {
          Ok(val) if val.is_promise() => true,
          Ok(val) => val.as_bool().unwrap_or(true),
@@ -417,6 +452,7 @@ pub fn invoke_message_action(engine: &Engine, action_id: u64, message_id: u64, c
       let Ok(arg) = build_message_context(&ctx, message_id, channel_id, true) else {
          return;
       };
+      restart_budget(&ctx);
       if let Err(err) = on_press.call::<_, Value<'_>>((arg,)).catch(&ctx) {
          log::error!("[{plugin}] addMessageAction onPress: {err}");
       }
@@ -529,6 +565,7 @@ pub fn invoke_composer_button(engine: &Engine, button_id: u64, channel_id: u64) 
       let Ok(arg) = build_ui_context(&ctx, channel_id) else {
          return;
       };
+      restart_budget(&ctx);
       if let Err(err) = on_press.call::<_, Value<'_>>((arg,)).catch(&ctx) {
          log::error!("[{plugin}] addComposerButton onPress: {err}");
       }
@@ -993,6 +1030,7 @@ pub fn intercept_send_body(engine: &Engine, channel_id: &str, body: &[u8]) -> Re
 
       let mut value = original.clone();
       for (plugin, function) in interceptors {
+         restart_budget(&ctx);
          match function
             .call::<_, Value<'_>>((value.clone(), argument.clone()))
             .catch(&ctx)
@@ -1090,4 +1128,225 @@ pub fn on_send<'js>(
             .retain(|(existing, ..)| *existing != id);
       }
    })
+}
+
+#[cfg(test)]
+mod tests {
+   use phoenix_runtime::{
+      Chosen,
+      discord::RequestAction,
+      js::{Engine, compile, settings_object},
+   };
+   use phoenix_sigs::registry::GatewayRegistry;
+   use rquickjs::{CatchResultExt, Object};
+
+   use super::*;
+
+   fn desktop_engine() -> Engine {
+      let engine = Engine::new(&GatewayRegistry::default()).expect("engine");
+      engine.with(|ctx| {
+         ctx.store_userdata(Desktop::default())
+            .expect("store Desktop userdata");
+      });
+      engine
+   }
+
+   fn eval_desktop_plugin(engine: &Engine, name: &str, source: &str) {
+      let err = engine.with(|ctx| {
+         let run = || -> rquickjs::Result<()> {
+            let api = Object::new(ctx.clone())?;
+            let messages = Object::new(ctx.clone())?;
+            desktop_patch_api(&ctx, name, &api, &messages)?;
+            api.set("messages", messages)?;
+            api.set("settings", settings_object(&ctx, name)?)?;
+            compile(&ctx, source)?.call((api,))
+         };
+         run().catch(&ctx).err().map(|err| err.to_string())
+      });
+      assert!(err.is_none(), "plugin {name} failed: {err:?}");
+   }
+
+   fn drop_desktop_engine(engine: Engine) {
+      engine.with(|ctx| {
+         let _ = ctx.remove_userdata::<Desktop<'_>>();
+      });
+      composer::sync_buttons(Vec::new());
+      drop(engine);
+   }
+
+   static ACC_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+   #[test]
+   fn async_message_accessory_resolves_and_sync_render_stays_healthy() {
+      let _serial = ACC_TEST_LOCK
+         .lock()
+         .unwrap_or_else(std::sync::PoisonError::into_inner);
+      let engine = desktop_engine();
+      eval_desktop_plugin(
+         &engine,
+         "async-acc",
+         r#"
+            let calls = 0;
+            phoenix.ui.addMessageAccessory({
+               priority: 1,
+               render: () => Promise.resolve("from-promise"),
+            });
+            phoenix.ui.addMessageAccessory({
+               priority: 2,
+               render: () => {
+                  calls += 1;
+                  return "sync-" + calls;
+               },
+            });
+         "#,
+      );
+      let epoch = accessories::mark_pending_for_test(123_456);
+      let first = render_accessories(&engine, 123_456, epoch);
+      assert_eq!(first.len(), 1);
+      assert_eq!(first[0].text, "sync-1");
+      // The worker finishing after drain must not clobber the async entry already
+      // stored by `set_rendered_for_epoch`.
+      assert!(!accessories::finish_pending(123_456, epoch, first));
+      let cached = accessories::cached_for_test(123_456).expect("cached async+sync accessories");
+      assert_eq!(
+         cached
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect::<Vec<_>>(),
+         vec!["from-promise", "sync-2"]
+      );
+      // The async callback invoked `evaluate_sync_only`, bumping `calls` to 2.
+      let second = render_accessories(&engine, 123_457, epoch);
+      assert_eq!(second.len(), 1);
+      assert_eq!(second[0].text, "sync-3");
+      drop_desktop_engine(engine);
+   }
+
+   #[test]
+   fn stale_async_accessory_after_remove_does_not_repopulate_cache() {
+      let _serial = ACC_TEST_LOCK
+         .lock()
+         .unwrap_or_else(std::sync::PoisonError::into_inner);
+      let engine = desktop_engine();
+      eval_desktop_plugin(
+         &engine,
+         "async-unload",
+         r#"
+            let resolvePending;
+            const remove = phoenix.ui.addMessageAccessory({
+               priority: 1,
+               render: () => new Promise((resolve) => { resolvePending = resolve; }),
+            });
+            phoenix.settings.define({
+               finish: {
+                  type: "button",
+                  title: "Finish",
+                  onPress() {
+                     remove();
+                     resolvePending("stale-after-remove");
+                  }
+               }
+            });
+         "#,
+      );
+      let epoch = accessories::mark_pending_for_test(999_001);
+      let initial = render_accessories(&engine, 999_001, epoch);
+      assert_eq!(initial, Vec::new());
+      assert!(!accessories::finish_pending(999_001, epoch, initial));
+
+      // Removing the accessory clears the cache and bumps the epoch; resolving
+      // the older promise afterward must not resurrect the removed accessory.
+      engine.press("async-unload", "finish");
+      assert_eq!(accessories::cached_for_test(999_001), None);
+      drop_desktop_engine(engine);
+   }
+
+   #[test]
+   fn send_interceptors_isolate_budget_between_plugins() {
+      let engine = desktop_engine();
+      eval_desktop_plugin(
+         &engine,
+         "spinner",
+         "phoenix.messages.onSend(() => { while (true) {} });",
+      );
+      eval_desktop_plugin(
+         &engine,
+         "rewriter",
+         "phoenix.messages.onSend((text) => text + '!');",
+      );
+      let action = intercept_send_body(&engine, "42", br#"{"content":"hi"}"#);
+      let RequestAction::Replace(bytes) = action else {
+         panic!("expected healthy plugin after spinner to rewrite content");
+      };
+      let json: serde_json::Value = serde_json::from_slice(&bytes).expect("valid json");
+      assert_eq!(json["content"], "hi!");
+      drop_desktop_engine(engine);
+   }
+
+   #[test]
+   fn composer_button_settings_write_flushes_to_plugins_json() {
+      let dir = std::env::temp_dir().join(format!(
+         "nyaacord-composer-flush-{}",
+         std::process::id()
+      ));
+      let choices_path = dir.join("plugins.json");
+      let _ = std::fs::remove_dir_all(&dir);
+
+      let mut engine = desktop_engine();
+      engine.set_choices_path(choices_path.clone());
+      eval_desktop_plugin(
+         &engine,
+         "silent-typing",
+         r#"
+            const settings = phoenix.settings.define({
+               enabled: { type: "switch", title: "Silent typing", default: true }
+            });
+            phoenix.ui.addComposerButton({
+               icon: "res://ic_mana_chat_eye",
+               label: "Silent Typing",
+               onPress() {
+                  settings.enabled = !settings.enabled;
+               }
+            });
+         "#,
+      );
+
+      // Seed plugins.json with an existing saved settings entry first.
+      engine.set_setting("silent-typing", "enabled", Chosen::Switch(true));
+      let initial: serde_json::Value = serde_json::from_slice(
+         &std::fs::read(&choices_path).expect("plugins.json after set_setting"),
+      )
+      .expect("valid initial plugins.json");
+      assert_eq!(initial["settings"]["silent-typing"]["enabled"], true);
+
+      let button_id = engine.with(|ctx| {
+         ctx.userdata::<Desktop<'_>>()
+            .and_then(|registry| {
+               registry
+                  .composer_buttons
+                  .borrow()
+                  .iter()
+                  .find(|entry| entry.plugin == "silent-typing")
+                  .map(|entry| entry.id)
+            })
+            .expect("registered composer button")
+      });
+
+      invoke_composer_button(&engine, button_id, 0);
+      let after_off: serde_json::Value = serde_json::from_slice(
+         &std::fs::read(&choices_path).expect("plugins.json after first composer press"),
+      )
+      .expect("valid plugins.json after first press");
+      assert_eq!(after_off["settings"]["silent-typing"]["enabled"], false);
+
+      invoke_composer_button(&engine, button_id, 0);
+      let after_on: serde_json::Value = serde_json::from_slice(
+         &std::fs::read(&choices_path).expect("plugins.json after second composer press"),
+      )
+      .expect("valid plugins.json after second press");
+      assert_eq!(after_on["settings"]["silent-typing"]["enabled"], true);
+
+      drop_desktop_engine(engine);
+      let _ = std::fs::remove_dir_all(&dir);
+   }
 }

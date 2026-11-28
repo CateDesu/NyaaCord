@@ -6,7 +6,7 @@ use rquickjs::{CatchResultExt, Ctx, Exception, Function, Object, Value};
 
 use crate::{
    Error, gateway,
-   js::{Before, Engine, Registry, js_error},
+   js::{Before, Engine, Registry, js_error, restart_budget},
 };
 
 #[derive(Clone)]
@@ -20,13 +20,14 @@ impl Engine {
    /// Runs the `before` hooks for `event`. Each sees the previous hook's
    /// payload.
    pub fn before(&self, event: EventId, name: &str, json: &str) -> Result<Before, Error> {
-      let result = self.context.with(|ctx| {
+      self.with(|ctx| {
          let hooks = registered(&ctx, event, |hook| hook.before.as_ref());
          if hooks.is_empty() {
             return Ok(Before::Keep);
          }
          let mut payload = ctx.json_parse(json).catch(&ctx).map_err(js_error)?;
          for (plugin, before) in hooks {
+            restart_budget(&ctx);
             match before.call::<_, Value<'_>>((payload.clone(),)).catch(&ctx) {
                Ok(result) if result.as_bool() == Some(false) => return Ok(Before::Drop),
                Ok(result) if result.is_undefined() => {},
@@ -42,27 +43,24 @@ impl Engine {
          Ok(Before::Replace(
             json.to_string().map_err(|err| Error::Js(err.to_string()))?,
          ))
-      });
-      self.drain_and_flush();
-      result
+      })
    }
 
    pub fn after(&self, event: EventId, name: &str, json: &str, ok: bool) -> Result<(), Error> {
-      let result = self.context.with(|ctx| {
+      self.with(|ctx| {
          let hooks = registered(&ctx, event, |hook| hook.after.as_ref());
          if hooks.is_empty() {
             return Ok(());
          }
          let payload = ctx.json_parse(json).catch(&ctx).map_err(js_error)?;
          for (plugin, after) in hooks {
+            restart_budget(&ctx);
             if let Err(err) = after.call::<_, ()>((payload.clone(), ok)).catch(&ctx) {
                log::error!("[{plugin}] after {name}: {err}");
             }
          }
          Ok(())
-      });
-      self.drain_and_flush();
-      result
+      })
    }
 }
 

@@ -70,10 +70,26 @@ impl RequestLayout {
    }
 }
 
-/// Size of the `Poll<Result<Response, Error>>` the runtime's poll detour
-/// mirrors, the layout of Windows `Discord.exe`. Linux build 2233 returns a
-/// larger one with other niche tags.
-pub const POLL_RESULT_SIZE: usize = 0x80;
+/// The size of `poll`'s result while it carries the body in a `Vec`.
+pub const BUFFERED_RESULT_SIZE: usize = 0x80;
+/// The size of `poll`'s result once it carries the body as a stream, on
+/// build 2233.
+pub const STREAMED_RESULT_SIZE: usize = 0x1C8;
+/// Where a streamed result keeps its body's kind, then the boxed
+/// `dyn Stream`.
+pub const STREAMED_BODY: usize = 0x178;
+
+/// How `poll` hands back a response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseLayout {
+   /// The whole body in a `Vec`, in a [`BUFFERED_RESULT_SIZE`] result.
+   Buffered,
+   /// The body as a stream at [`STREAMED_BODY`], read after `poll` returns.
+   Streamed {
+      /// The `u16` status.
+      status: usize,
+   },
+}
 
 /// Located vtable slots and host allocator entry points for Desktop Phoenix's
 /// `libdiscord/crates/http` transport.
@@ -92,8 +108,8 @@ pub struct DesktopHttpTransport {
    pub poll_slots: Vec<usize>,
    /// Original `SendFuture::poll` function address.
    pub poll_fn: usize,
-   /// Bytes `poll_fn` writes through its hidden return pointer.
-   pub poll_output: usize,
+   /// How `poll`'s result holds the response.
+   pub response: Found<ResponseLayout>,
    /// Host's `__rust_alloc(size, align)` if located.
    pub host_alloc: Option<usize>,
    /// Host's `__rust_dealloc(ptr, size, align)` if located.
@@ -141,19 +157,18 @@ impl DesktopHttpTransport {
       if !poll_slots.contains(&direct_slot) {
          poll_slots.push(direct_slot);
       }
-      let poll_output = image
+      let response = image
          .function_bounds(poll_fn)
          .and_then(|(start, end)| image.read(start, end - start).map(|code| (start, code)))
-         .map_or(0, |(start, code)| {
-            extent(&phoenix_hook::x86::sret_stores(abi, code, start))
-         });
+         .ok_or_else(|| "SendFuture::poll is unreadable".to_owned())
+         .and_then(|(start, code)| response_layout(abi, code, start));
 
       // 4. The host's own `__rust_alloc` and `__rust_dealloc`, so response body
       //    growth stays allocator-compatible. Both hand the same global allocator
       //    static to its implementation.
       let host_alloc = box_future.and_then(|box_future| find_host_alloc(image, abi, box_future));
       let host_dealloc = find_host_dealloc(image, abi, send_fn, send_end)
-         .or_else(|| host_alloc.and_then(|alloc| dealloc_beside(image, abi, alloc)));
+         .or_else(|| host_alloc.and_then(|alloc| dealloc_sharing(image, abi, alloc)));
       let (host_alloc, host_dealloc) = match (host_alloc, host_dealloc) {
          (Some(alloc), Some(dealloc))
             if allocator_static(image, abi, alloc).is_none()
@@ -171,22 +186,36 @@ impl DesktopHttpTransport {
          request,
          poll_slots,
          poll_fn,
-         poll_output,
+         response,
          host_alloc,
          host_dealloc,
       })
    }
+}
 
-   /// Whether `SendFuture::poll` returns the [`POLL_RESULT_SIZE`]-byte result
-   /// the poll detour reads and copies.
-   pub fn poll_fits(&self) -> Found<()> {
-      if self.poll_output != POLL_RESULT_SIZE {
-         return Err(format!(
-            "SendFuture::poll at {:#x} fills {:#x} bytes, expected {POLL_RESULT_SIZE:#x}",
-            self.poll_fn, self.poll_output
-         ));
-      }
-      Ok(())
+/// Reads how `poll` at `ip` returns its response from the stores through its
+/// result pointer.
+fn response_layout(abi: Abi, code: &[u8], ip: usize) -> Found<ResponseLayout> {
+   let stores = phoenix_hook::x86::sret_stores(abi, code, ip);
+   let extent = extent(&stores);
+   if (1..=BUFFERED_RESULT_SIZE).contains(&extent) {
+      return Ok(ResponseLayout::Buffered);
+   }
+   let body = [STREAMED_BODY, STREAMED_BODY + 8, STREAMED_BODY + 16]
+      .iter()
+      .all(|&offset| stores.contains(&(offset, 8)));
+   let mut statuses = stores
+      .iter()
+      .filter(|&&(_, size)| size == 2)
+      .map(|&(offset, _)| offset)
+      .collect::<Vec<_>>();
+   statuses.sort_unstable();
+   statuses.dedup();
+   match statuses[..] {
+      [status] if body && extent <= STREAMED_RESULT_SIZE && status + 2 <= STREAMED_RESULT_SIZE => {
+         Ok(ResponseLayout::Streamed { status })
+      },
+      _ => Err(format!("poll writes {extent:#x} bytes of its result")),
    }
 }
 
@@ -632,9 +661,14 @@ fn find_host_alloc(image: &Image<'_>, abi: Abi, box_future: usize) -> Option<usi
    None
 }
 
-/// Whether the first call in `func` is followed by `test al, al`.
+/// Whether the first call in `func` is followed by `test al, al`. Linux
+/// builds since 2026-11-26 put a one-byte `ret` shim right before
+/// `__rust_alloc`, so the read stops at the function's end.
 fn checks_allocator(image: &Image<'_>, func: usize) -> bool {
-   let Some(code) = image.read(func, 0x20) else {
+   let len = image
+      .function_bounds(func)
+      .map_or(0x20, |(_, end)| end.saturating_sub(func).min(0x20));
+   let Some(code) = image.read(func, len) else {
       return false;
    };
    phoenix_hook::x86::disasm(code, func, 12)
@@ -690,30 +724,38 @@ fn find_host_dealloc(
 
 /// Whether `func` counts freed bytes down with `lock sub` near its start.
 fn counts_down(image: &Image<'_>, func: usize) -> bool {
-   image.read(func, 0x40).is_some_and(|body| {
+   let len = image
+      .function_bounds(func)
+      .map_or(0x40, |(_, end)| end.saturating_sub(func).min(0x40));
+   image.read(func, len).is_some_and(|body| {
       body
          .windows(3)
          .any(|w| w == [0xF0, 0x48, 0x29] || w == [0xF0, 0x4C, 0x29])
    })
 }
 
-/// `__rust_dealloc`, from the allocator shims emitted next to `alloc`.
+/// `__rust_dealloc`, from the other allocator shims that load `alloc`'s
+/// global allocator static.
 ///
 /// System V builds free request bodies through wrappers the leaf search in
 /// [`find_host_dealloc`] does not reach. `alloc` hands the global allocator
 /// static to its implementation with `lea rdi, [rip + disp32]`, and so does
 /// `__rust_dealloc`, without `alloc`'s set-up check and counting the freed
-/// bytes down after.
-fn dealloc_beside(image: &Image<'_>, abi: Abi, alloc: usize) -> Option<usize> {
-   /// The shims are a few dozen bytes each.
-   const NEAR: usize = 0x400;
+/// bytes down after. Linux build 2233 emits the two 0x45 bytes apart, later
+/// builds 0x2ce8.
+fn dealloc_sharing(image: &Image<'_>, abi: Abi, alloc: usize) -> Option<usize> {
    let global = allocator_static(image, abi, alloc)?;
-   let start = alloc.saturating_sub(NEAR);
-   let mut found: Vec<usize> = lea_arg0(abi, image.read(start, 2 * NEAR)?, start)
-      .filter(|&(_, target)| target == global)
-      .filter_map(|(lea, _)| Some(image.function_bounds(lea)?.0))
+   let mut found: Vec<usize> = crate::desktop::lea_refs(image, global)
+      .into_iter()
+      .filter(|&lea| {
+         image
+            .read(lea, 7)
+            .is_some_and(|code| lea_arg0(abi, code, lea).next().is_some())
+      })
+      .filter_map(|lea| Some(image.function_bounds(lea)?.0))
       .filter(|&func| func != alloc && !checks_allocator(image, func) && counts_down(image, func))
       .collect();
+   found.sort_unstable();
    found.dedup();
    match found[..] {
       [dealloc] => Some(dealloc),

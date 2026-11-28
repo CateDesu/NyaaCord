@@ -1,5 +1,5 @@
 // @description Keeps deleted messages and edit history
-// @version 0.2.2
+// @version 0.3.0
 // @author amaanq
 
 const { gateway } = phoenix;
@@ -62,7 +62,13 @@ interface Seen {
   changes: Change[];
   deletedAt?: number;
   repainted?: boolean;
+  /// Kept in place by desktop's optimistic delete hook, so DELETE does not reinsert it.
+  kept?: boolean;
+  /// The whole message on desktop, to put back one this client deleted.
+  message?: Phoenix.GatewayMessage;
 }
+
+const isDesktop = typeof (phoenix as { bridge?: unknown }).bridge === "undefined";
 
 const EPHEMERAL = 64;
 const RED = 0xfff23f43;
@@ -87,6 +93,7 @@ const remember = (message: Phoenix.GatewayMessage) => {
   }
   entry.content = message.content;
   entry.attachments = message.attachments ?? entry.attachments;
+  if (isDesktop) entry.message = entry.message ? { ...entry.message, ...message } : message;
   return entry;
 };
 
@@ -120,8 +127,6 @@ const deleted = phoenix.ui.addMessageAccessory({
     return at === undefined ? null : { text: `Deleted · ${clock(at)}`, color: RED, tint: RED };
   },
 });
-
-const isDesktop = typeof (phoenix as { bridge?: unknown }).bridge === "undefined";
 
 // Hydrate seen messages from channel history fetches on desktop so edits and
 // deletes of messages sent before startup are also captured cleanly.
@@ -207,6 +212,7 @@ const markDeleted = (id: string, channelId?: string, guildId?: string) => {
     } catch {
       // Runs outside a gateway hook during same-client optimistic delete;
       // the follow-up MESSAGE_DELETE gateway event will trigger the repaint.
+      entry.kept = true;
     }
   }
   return true;
@@ -219,6 +225,31 @@ phoenix.hook(gateway.messageDelete, {
     }
   },
 });
+
+// Desktop drops a message this client deletes before any gateway event, so
+// once Discord confirms the delete, the message goes back in and is marked.
+if (isDesktop) {
+  phoenix.discord.onResponse({ method: "DELETE", pathPrefix: "/channels/", pathIncludes: "/messages/" }, (res) => {
+    const [root, channelId, resource, id, rest] = res.path.split(/[?#]/, 1)[0].split("/").slice(1);
+    if (
+      res.status < 200 ||
+      res.status >= 300 ||
+      root !== "channels" ||
+      resource !== "messages" ||
+      !channelId ||
+      !id ||
+      rest !== undefined ||
+      !settings.keepDeleted
+    ) {
+      return;
+    }
+    const entry = seen.get(id);
+    const message = entry?.message;
+    if (!message || entry.kept || message.channel_id !== channelId || !markDeleted(id)) return;
+    const { nonce: _, ...restored } = message;
+    phoenix.enqueue(gateway.messageCreate, restored);
+  });
+}
 
 phoenix.hook(gateway.messageDeleteBulk, {
   before(bulk) {

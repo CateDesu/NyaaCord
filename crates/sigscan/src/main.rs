@@ -103,6 +103,12 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
    match machine {
       Machine::X86_64 => {
          let abi = x86::Abi::of(image);
+         if abi == x86::Abi::Win64 {
+            report(
+               "Windows restart",
+               desktop::windows_restart_script(image).map(at),
+            );
+         }
          let prologues = desktop::Prologues::of(abi);
          report(
             "window title",
@@ -135,8 +141,9 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
             "http responses",
             http.as_ref().map_err(Clone::clone).and_then(|http| {
                http
-                  .poll_fits()
-                  .map(|()| format!("{} (fills {:#x})", at(http.poll_fn), http.poll_output))
+                  .response
+                  .clone()
+                  .map(|layout| format!("{} {layout:x?}", at(http.poll_fn)))
             }),
          );
          report(
@@ -228,6 +235,20 @@ fn check(image: &Image<'_>, machine: Machine, macho: bool) -> misstep::Result<()
                      at(found.frame),
                      found.force_render,
                      at(found.ping)
+                  )
+               }),
+            );
+            report(
+               "va scaler lookup",
+               desktop::va_scaler_lookup(image).map(|skip| at(skip.at)),
+            );
+            report(
+               "linux primary display",
+               desktop::linux_primary_display(image).map(|found| {
+                  format!(
+                     "{} (displays {})",
+                     at(found.primary_display),
+                     at(found.displays)
                   )
                }),
             );

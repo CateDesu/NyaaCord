@@ -71,8 +71,14 @@ pub struct RenderedAccessory {
 }
 
 enum CacheEntry {
-   Pending,
+   Pending(u64),
    Ready(Vec<RenderedAccessory>),
+}
+
+#[derive(Default)]
+struct Cache {
+   epoch: u64,
+   entries: HashMap<u64, CacheEntry>,
 }
 
 static ORIG_RENDER_ROW: OnceLock<RenderRowFn> = OnceLock::new();
@@ -82,8 +88,7 @@ static MSG_ID_OFFSET: AtomicUsize = AtomicUsize::new(0);
 static BODY_MSG_ID_OFFSET: AtomicUsize = AtomicUsize::new(0);
 static ROW_COLORS_OFFSET: AtomicUsize = AtomicUsize::new(0);
 static ACTIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
-static CACHE: LazyLock<RwLock<HashMap<u64, CacheEntry>>> =
-   LazyLock::new(|| RwLock::new(HashMap::new()));
+static CACHE: LazyLock<RwLock<Cache>> = LazyLock::new(|| RwLock::new(Cache::default()));
 static WORKER_TX: OnceLock<mpsc::Sender<u64>> = OnceLock::new();
 
 const MAX_CACHE_ENTRIES: usize = 8192;
@@ -96,25 +101,108 @@ pub fn set_active_count(count: usize) {
 }
 
 pub fn clear_cache() {
-   if let Ok(mut map) = CACHE.write() {
-      map.clear();
+   if let Ok(mut cache) = CACHE.write() {
+      cache.epoch = cache.epoch.wrapping_add(1);
+      cache.entries.clear();
    }
+}
+
+pub fn cache_epoch() -> u64 {
+   CACHE.read().map_or(0, |cache| cache.epoch)
+}
+
+fn pending_epoch(mid: u64) -> Option<u64> {
+   let cache = CACHE.read().ok()?;
+   match cache.entries.get(&mid)? {
+      CacheEntry::Pending(epoch) if *epoch == cache.epoch => Some(*epoch),
+      CacheEntry::Pending(_) | CacheEntry::Ready(_) => None,
+   }
+}
+
+fn set_rendered_in(
+   cache: &mut Cache,
+   message_id: u64,
+   expected_epoch: Option<u64>,
+   mut items: Vec<RenderedAccessory>,
+) -> bool {
+   if let Some(epoch) = expected_epoch
+      && cache.epoch != epoch
+   {
+      return false;
+   }
+   items.sort_by_key(|a| a.priority);
+   if cache.entries.len() > MAX_CACHE_ENTRIES {
+      cache.entries.clear();
+   }
+   let prev_same =
+      matches!(cache.entries.get(&message_id), Some(CacheEntry::Ready(old)) if *old == items);
+   cache.entries.insert(message_id, CacheEntry::Ready(items));
+   !prev_same
 }
 
 /// Stores freshly evaluated accessories for `message_id` and requests a repaint
 /// of Discord's window so edits/deletes appear immediately.
-pub fn set_rendered(message_id: u64, mut items: Vec<RenderedAccessory>) {
-   items.sort_by_key(|a| a.priority);
-   let changed = CACHE.write().is_ok_and(|mut map| {
-      if map.len() > MAX_CACHE_ENTRIES {
-         map.clear();
-      }
-      let prev_same = matches!(map.get(&message_id), Some(CacheEntry::Ready(old)) if *old == items);
-      map.insert(message_id, CacheEntry::Ready(items));
-      !prev_same
-   });
+pub fn set_rendered(message_id: u64, items: Vec<RenderedAccessory>) {
+   let changed = CACHE
+      .write()
+      .is_ok_and(|mut cache| set_rendered_in(&mut cache, message_id, None, items));
    if changed {
       invalidate_discord_windows();
+   }
+}
+
+/// Stores asynchronously resolved accessories only if no `clear_cache` has
+/// invalidated `epoch` in the meantime.
+pub fn set_rendered_for_epoch(message_id: u64, epoch: u64, items: Vec<RenderedAccessory>) {
+   let changed = CACHE
+      .write()
+      .is_ok_and(|mut cache| set_rendered_in(&mut cache, message_id, Some(epoch), items));
+   if changed {
+      invalidate_discord_windows();
+   }
+}
+
+fn finish_pending_in(
+   cache: &mut Cache,
+   mid: u64,
+   epoch: u64,
+   mut items: Vec<RenderedAccessory>,
+) -> bool {
+   if cache.epoch != epoch {
+      return false;
+   }
+   items.sort_by_key(|a| a.priority);
+   let non_empty = !items.is_empty();
+   let Some(entry) = cache.entries.get_mut(&mid) else {
+      return false;
+   };
+   if !matches!(entry, CacheEntry::Pending(entry_epoch) if *entry_epoch == epoch) {
+      return false;
+   }
+   *entry = CacheEntry::Ready(items);
+   non_empty
+}
+
+pub fn finish_pending(mid: u64, epoch: u64, items: Vec<RenderedAccessory>) -> bool {
+   CACHE
+      .write()
+      .is_ok_and(|mut cache| finish_pending_in(&mut cache, mid, epoch, items))
+}
+
+#[cfg(test)]
+pub fn mark_pending_for_test(mid: u64) -> u64 {
+   CACHE.write().map_or(0, |mut cache| {
+      let epoch = cache.epoch;
+      cache.entries.insert(mid, CacheEntry::Pending(epoch));
+      epoch
+   })
+}
+
+#[cfg(test)]
+pub fn cached_for_test(mid: u64) -> Option<Vec<RenderedAccessory>> {
+   match CACHE.read().ok()?.entries.get(&mid)? {
+      CacheEntry::Pending(_) => None,
+      CacheEntry::Ready(items) => Some(items.clone()),
    }
 }
 
@@ -137,18 +225,13 @@ fn ensure_worker() -> &'static mpsc::Sender<u64> {
                   if ACTIVE_COUNT.load(Ordering::Acquire) == 0 {
                      break;
                   }
-                  let mut items = phoenix_runtime::engine().map_or_else(Vec::new, |engine| {
-                     crate::js::ui::render_accessories(&engine, mid)
+                  let Some(epoch) = pending_epoch(mid) else {
+                     continue;
+                  };
+                  let items = phoenix_runtime::engine().map_or_else(Vec::new, |engine| {
+                     crate::js::ui::render_accessories(&engine, mid, epoch)
                   });
-                  items.sort_by_key(|a| a.priority);
-                  let non_empty = !items.is_empty();
-                  if let Ok(mut map) = CACHE.write() {
-                     if map.len() > MAX_CACHE_ENTRIES {
-                        map.clear();
-                     }
-                     map.insert(mid, CacheEntry::Ready(items));
-                  }
-                  if non_empty {
+                  if finish_pending(mid, epoch, items) {
                      any_visible = true;
                   }
                }
@@ -162,23 +245,26 @@ fn ensure_worker() -> &'static mpsc::Sender<u64> {
 }
 
 fn lookup_cached(message_id: u64) -> Option<Vec<RenderedAccessory>> {
-   if let Ok(map) = CACHE.read()
-      && let Some(entry) = map.get(&message_id)
+   if let Ok(cache) = CACHE.read()
+      && let Some(entry) = cache.entries.get(&message_id)
    {
       return match entry {
-         CacheEntry::Pending => None,
+         CacheEntry::Pending(_) => None,
          CacheEntry::Ready(items) if items.is_empty() => None,
          CacheEntry::Ready(items) => Some(items.clone()),
       };
    }
-   let should_queue = CACHE.write().is_ok_and(|mut map| {
-      if map.contains_key(&message_id) {
+   let should_queue = CACHE.write().is_ok_and(|mut cache| {
+      if cache.entries.contains_key(&message_id) {
          return false;
       }
-      if map.len() > MAX_CACHE_ENTRIES {
-         map.clear();
+      if cache.entries.len() > MAX_CACHE_ENTRIES {
+         cache.entries.clear();
       }
-      map.insert(message_id, CacheEntry::Pending);
+      let epoch = cache.epoch;
+      cache
+         .entries
+         .insert(message_id, CacheEntry::Pending(epoch));
       true
    });
    if should_queue {
@@ -191,9 +277,9 @@ fn lookup_cached(message_id: u64) -> Option<Vec<RenderedAccessory>> {
 /// `MessageRow::render`). Cache misses are queued right afterward by
 /// `render_row_detour`, which triggers a repaint.
 fn lookup_cached_tint(message_id: u64) -> Option<u32> {
-   match CACHE.read().ok()?.get(&message_id)? {
+   match CACHE.read().ok()?.entries.get(&message_id)? {
       CacheEntry::Ready(items) => items.iter().rev().find_map(|item| item.tint),
-      CacheEntry::Pending => None,
+      CacheEntry::Pending(_) => None,
    }
 }
 
@@ -219,7 +305,8 @@ pub fn invalidate_discord_windows() {
 // Anchor Locator & Inline Hook
 // ---------------------------------------------------------------------------
 
-/// Locates and hooks Discord's GPUI `MessageRow::render` from `DllMain`.
+/// Locates and hooks Discord's GPUI `MessageRow::render` during
+/// [`crate::prepare`].
 pub fn install(image: &Image<'static>) {
    if !gpui::supports_accessories() {
       log::warn!("desktop accessories: GPUI text/push primitives unavailable, skipping");
@@ -496,5 +583,62 @@ mod tests {
       assert_eq!(argb_to_rgba(0x8058_65F2), 0x5865_F280);
       assert_eq!(argb_to_rgba(0x00F2_3F43), 0xF23F_43FF);
       assert_eq!(argb_to_rgba(0), 0);
+   }
+
+   #[test]
+   fn finish_pending_preserves_ready_cleared_and_newer_epoch_entries() {
+      let item = |priority, text: &str| RenderedAccessory {
+         priority,
+         text: text.to_owned(),
+         color: None,
+         tint: None,
+      };
+      let mut cache = Cache {
+         epoch: 1,
+         entries: HashMap::new(),
+      };
+
+      // Pending transitions to Ready sorted by priority.
+      cache.entries.insert(1, CacheEntry::Pending(1));
+      assert!(finish_pending_in(
+         &mut cache,
+         1,
+         1,
+         vec![item(2, "second"), item(1, "first")],
+      ));
+      assert!(matches!(
+         cache.entries.get(&1),
+         Some(CacheEntry::Ready(items))
+            if items == &[item(1, "first"), item(2, "second")]
+      ));
+
+      // A Ready entry populated by an async promise during drain is never clobbered.
+      let async_items = vec![item(1, "from-promise"), item(2, "sync-2")];
+      cache
+         .entries
+         .insert(2, CacheEntry::Ready(async_items.clone()));
+      assert!(!finish_pending_in(&mut cache, 2, 1, vec![item(2, "sync-1")]));
+      assert!(matches!(
+         cache.entries.get(&2),
+         Some(CacheEntry::Ready(items)) if *items == async_items
+      ));
+
+      // Cleared entries stay absent rather than caching stale worker items.
+      assert!(!finish_pending_in(&mut cache, 3, 1, vec![item(1, "stale")]));
+      assert!(!cache.entries.contains_key(&3));
+
+      // After clear_cache bumps the epoch and GPUI re-marks mid pending,
+      // a stale worker or async promise from epoch 1 cannot overwrite epoch 2.
+      cache.epoch = 2;
+      cache.entries.clear();
+      cache.entries.insert(4, CacheEntry::Pending(2));
+      assert!(!finish_pending_in(&mut cache, 4, 1, vec![item(1, "stale-worker")]));
+      assert!(!set_rendered_in(&mut cache, 4, Some(1), vec![item(1, "stale-async")]));
+      assert!(matches!(cache.entries.get(&4), Some(CacheEntry::Pending(2))));
+      assert!(finish_pending_in(&mut cache, 4, 2, vec![item(1, "fresh")]));
+      assert!(matches!(
+         cache.entries.get(&4),
+         Some(CacheEntry::Ready(items)) if items == &[item(1, "fresh")]
+      ));
    }
 }

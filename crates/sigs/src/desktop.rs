@@ -37,6 +37,37 @@ const FRAME_PROLOGUE_LEN: usize = 19;
 const MEDIA_FETCH_PROLOGUE: Pattern = Pattern::new("55 41 57 41 56 56 57 53 48 81 EC ?? ?? ?? ??");
 const MEDIA_FETCH_PROLOGUE_LEN: usize = 15;
 
+/// GPUI's Windows restart script.
+pub const WINDOWS_RESTART_SCRIPT: &str = r#"
+            $pidToWaitFor = $env:ZED_RESTART_PID
+            $exePath = $env:ZED_RESTART_EXECUTABLE
+            $argumentList = $env:ZED_RESTART_ARGUMENTS
+
+            [Environment]::SetEnvironmentVariable("ZED_RESTART_PID", $null)
+            [Environment]::SetEnvironmentVariable("ZED_RESTART_EXECUTABLE", $null)
+            [Environment]::SetEnvironmentVariable("ZED_RESTART_ARGUMENTS", $null)
+
+            while ($true) {
+                $process = Get-Process -Id $pidToWaitFor -ErrorAction SilentlyContinue
+                if (-not $process) {
+                    if ([string]::IsNullOrEmpty($argumentList)) {
+                        Start-Process -FilePath $exePath
+                    } else {
+                        Start-Process -FilePath $exePath -ArgumentList $argumentList
+                    }
+                    break
+                }
+                Start-Sleep -Seconds 0.1
+            }
+            "#;
+
+pub fn windows_restart_script(image: &Image<'_>) -> Found<usize> {
+   one(
+      "Windows restart script",
+      &image.find_bytes(WINDOWS_RESTART_SCRIPT.as_bytes()),
+   )
+}
+
 /// A function entry [`Image::hook_entry`] can displace: whole instructions
 /// with no RIP-relative operand, at least 14 bytes.
 #[derive(Clone, Copy)]
@@ -641,6 +672,44 @@ fn none_stores(code: &[u8]) -> Vec<usize> {
       .windows(4)
       .filter(|w| w[0] == 0xC6 && w[1] & 0xF8 == 0x40 && w[1] != 0x44 && w[3] == 0xFF)
       .map(|w| usize::from(w[2]))
+      .collect()
+}
+
+/// Offsets of `lea reg, [base + d8]` followed within 16 bytes by
+/// `mov byte [reg], 0xff`, the same `None` store where the build keeps the
+/// slot's address to pass it to a drop call first.
+fn none_stores_through(code: &[u8]) -> Vec<usize> {
+   (0..code.len())
+      .filter_map(|at| {
+         let [rex, 0x8D, modrm, ..] = *code.get(at..at + 5)? else {
+            return None;
+         };
+         if rex & 0xF8 != 0x48 || modrm & 0xC0 != 0x40 {
+            return None;
+         }
+         let (disp, len) = if modrm & 7 == 4 {
+            (code[at + 4], 5)
+         } else {
+            (code[at + 3], 4)
+         };
+         let dst = modrm >> 3 & 7;
+         if dst == 4 || dst == 5 {
+            return None;
+         }
+         let store: &[u8] = if rex & 4 == 0 {
+            &[0xC6, dst, 0xFF]
+         } else {
+            &[0x41, 0xC6, dst, 0xFF]
+         };
+         let after = code.get(at + len..(at + len + 16).min(code.len()))?;
+         after
+            .windows(store.len())
+            .enumerate()
+            .any(|(pos, w)| {
+               w == store && (rex & 4 != 0 || pos == 0 || after[pos - 1] & 0xF0 != 0x40)
+            })
+            .then_some(usize::from(disp))
+      })
       .collect()
 }
 
@@ -1274,8 +1343,8 @@ pub fn emoji_check(image: &Image<'_>) -> Found<EmojiCheck> {
    }
 }
 
-/// Settings page 24's sidebar name, `Phoenix`, and its id,
-/// `DESKTOP_PHOENIX`, both relabeled in place.
+/// Settings page 24's sidebar name, `Phoenix`, and the `PHOENIX` that ends
+/// its id, both relabeled in place.
 #[derive(Clone, Copy, Debug)]
 pub struct SettingsLabel {
    pub name: usize,
@@ -1283,11 +1352,24 @@ pub struct SettingsLabel {
 }
 
 /// Page 24's label, from its one loader: `lea rax, [name]` with length 7,
-/// then a load of the id. COFF builds keep the two as one literal,
-/// `PhoenixDESKTOP_PHOENIX`; ELF builds place them apart.
+/// then a load of the id.
+///
+/// The id is `DESKTOP_PHOENIX` through Linux build 2233 and `PHOENIX` after
+/// it. COFF builds keep name and id as one literal, `PhoenixDESKTOP_PHOENIX`;
+/// ELF builds place them apart.
 pub fn settings_label_parts(image: &Image<'_>) -> Found<SettingsLabel> {
    const NAME: &[u8] = b"Phoenix";
-   let ids = image.find_bytes(b"DESKTOP_PHOENIX");
+   const ID: &[u8] = b"PHOENIX";
+   const PREFIX: &[u8] = b"DESKTOP_";
+   let suffixes = image.find_bytes(ID);
+   let ids: Vec<usize> = suffixes
+      .iter()
+      .filter_map(|&suffix| {
+         let start = suffix.checked_sub(PREFIX.len())?;
+         (image.read(start, PREFIX.len())? == PREFIX).then_some(start)
+      })
+      .chain(suffixes.iter().copied())
+      .collect();
    let mut found: Vec<(usize, usize)> = lea_refs_many(image, &ids)
       .into_iter()
       .flat_map(|(id, loads)| loads.into_iter().map(move |lea| (id, lea)))
@@ -1298,7 +1380,12 @@ pub fn settings_label_parts(image: &Image<'_>) -> Found<SettingsLabel> {
             .windows(3)
             .rposition(|w| w == lea_rip(Register::RAX))?;
          let name = rel32_target(image, start + at + 3)?;
-         (image.read(name, NAME.len())? == NAME).then_some((name, id))
+         let suffix = if image.read(id, ID.len())? == ID {
+            id
+         } else {
+            id + PREFIX.len()
+         };
+         (image.read(name, NAME.len())? == NAME).then_some((name, suffix))
       })
       .collect();
    found.sort_unstable();
@@ -2068,7 +2155,9 @@ pub fn message_body(image: &Image<'_>, render_row: usize) -> Found<MessageBody> 
       .find(|disp| (0x100..=0x800).contains(disp))
       .ok_or("message body id load not found")?;
    // Three `mov r32, imm32` with consecutive `RowColors` field offsets
-   // `+0xc`, `+0x8` and `+0x4`.
+   // `+0xc`, `+0x8` and `+0x4`. Newer builds take `lea r64, [arg1 + RowColors]`
+   // and pick the fields with `push imm8; pop`.
+   let arg1 = number(Abi::of(image).arg(1));
    let row_colors_offset = head
       .windows(15)
       .enumerate()
@@ -2080,6 +2169,11 @@ pub fn message_body(image: &Image<'_>, render_row: usize) -> Found<MessageBody> 
             imm32(image, func + at + 11)?,
          );
          (a == c + 4 && c == d + 4 && (0x100..=0x400).contains(&d)).then(|| d - 4)
+      })
+      .or_else(|| {
+         mem_operands(head, 0x8D)
+            .find(|&(_, base, disp)| base == arg1 && (0x100..=0x400).contains(&disp))
+            .map(|(_, _, disp)| disp)
       })
       .ok_or("message body row colors not found")?;
    Ok(MessageBody {
@@ -2310,10 +2404,10 @@ pub fn message_context_menu(image: &Image<'_>) -> Found<MessageContextMenu> {
       ));
    }
 
-   // Right after `MessageContextMenu`'s anchor call, the 4th call computes
-   // message permissions and reads `&message.channel_id` into its second
-   // argument, `lea arg1, [msg + disp32]`.
-   let post_anchor_calls = calls_in(image, anchor_lea, 0x80);
+   // Soon after `MessageContextMenu`'s anchor call, a call computes message
+   // permissions and reads `&message.channel_id` into its second argument,
+   // `lea arg1, [msg + disp32]`, as far as anchor + 0x7D on Linux.
+   let post_anchor_calls = calls_in(image, anchor_lea, 0xC0);
    let channel_id_offset = post_anchor_calls
       .iter()
       .find_map(|&(_, callee)| {
@@ -2753,13 +2847,13 @@ pub struct WaylandFrame {
 
 /// Locates [`WaylandFrame`] from `frame`'s start and the `request_frame` that
 /// moves `status` from idle to requested and pings, on System V builds.
+///
+/// `frame` loads `force_render` with the first `movzx r8d, byte [state +
+/// disp32]`, whose state register changed from r13 to r12 after build 2233.
 pub fn wayland_frame(image: &Image<'_>) -> Found<WaylandFrame> {
    const FRAME: Pattern = Pattern::new(
-      "55 41 57 41 56 41 55 41 54 53 48 81 EC ?? ?? ?? ?? 48 8B 6F 10 C6 45 10 01 4C 8B 2F 49 83 \
-       7D 10 00 0F 85 ?? ?? ?? ?? 41 C6 85 ?? ?? ?? ?? 00 41 80 BD ?? ?? ?? ?? 02 0F 93 C0 4C 8B \
-       67 08 49 83 7C 24 10 00 0F 85 ?? ?? ?? ?? 45 0F B6 85",
+      "55 41 57 41 56 41 55 41 54 53 48 81 EC ?? ?? ?? ?? 48 8B 6F 10 C6 45 10 01 4C 8B",
    );
-   const FRAME_LEN: usize = 78;
    /// `status` at +0x10, idle 7 to requested 5, `requested` at +0x20 set to
    /// `Instant::now()`, then a tail call to `Ping::ping(&self.ping)` at +0x18.
    const REQUEST: Pattern = Pattern::new(
@@ -2769,8 +2863,15 @@ pub fn wayland_frame(image: &Image<'_>) -> Found<WaylandFrame> {
    );
    const REQUEST_LEN: usize = 71;
    let frame = one("Wayland frame", &image.scan(FRAME))?;
-   let force_render =
-      imm32(image, frame + FRAME_LEN).ok_or("Wayland frame force_render did not decode")?;
+   let force_render = image
+      .read(frame, 0x80)
+      .and_then(|code| {
+         phoenix_hook::x86::disasm(code, frame, 24)
+            .into_iter()
+            .find(|line| line.text.starts_with("movzx r8d,byte ptr ["))
+      })
+      .and_then(|line| imm32(image, line.addr + line.len - 4))
+      .ok_or("Wayland frame force_render did not decode")?;
    let request = one("Wayland request_frame", &image.scan(REQUEST))?;
    let ping = rel32_target(image, request + REQUEST_LEN)
       .and_then(|slot| image.read_usize(slot))
@@ -2780,6 +2881,92 @@ pub fn wayland_frame(image: &Image<'_>) -> Found<WaylandFrame> {
       frame,
       force_render,
       ping,
+   })
+}
+
+/// The branch that skips looking up `vapostproc` for a clip pipeline, and the
+/// bytes that make it unconditional.
+#[derive(Clone, Copy, Debug)]
+pub struct VaScalerSkip {
+   pub at: usize,
+   pub patch: &'static [u8],
+}
+
+/// The `jne` before the `vapostproc` lookup that jumps where a failed lookup
+/// goes.
+///
+/// With Mesa's radeonsi, `vapostproc` fails every frame after the first with
+/// `vaBeginPicture: invalid VASurfaceID` (build 2233), freezing the clip.
+pub fn va_scaler_lookup(image: &Image<'_>) -> Found<VaScalerSkip> {
+   if Abi::of(image) != Abi::SysV {
+      return Err("the VA scaler lookup is decoded on Linux builds only".to_owned());
+   }
+   let skips = image
+      .find_bytes(b"\0vapostproc\0")
+      .into_iter()
+      .flat_map(|text| lea_refs(image, text + 1))
+      .filter_map(|lea| {
+         let (start, end) = image.function_bounds(lea)?;
+         let lines = phoenix_hook::x86::disasm(image.read(start, end - start)?, start, usize::MAX);
+         let at = lines.iter().position(|line| line.addr == lea)?;
+         let skip = lines[at.saturating_sub(4)..at]
+            .iter()
+            .rfind(|line| line.text.starts_with("jne "))?;
+         let fails = lines[at..lines.len().min(at + 6)]
+            .iter()
+            .find(|line| line.text.starts_with("je "))?;
+         if skip.target.is_none() || skip.target != fails.target {
+            return None;
+         }
+         // `jne rel8` becomes `jmp rel8`, `jne rel32` a `nop` and `jmp rel32`.
+         let patch: &'static [u8] = match image.read(skip.addr, 2)? {
+            [0x75, _] => &[0xEB],
+            [0x0F, 0x85] => &[0x90, 0xE9],
+            _ => return None,
+         };
+         Some(VaScalerSkip {
+            at: skip.addr,
+            patch,
+         })
+      })
+      .collect::<Vec<_>>();
+   one("VA scaler lookup", &skips)
+}
+
+/// GPUI's `LinuxPlatform::primary_display` and `displays`, the slot before
+/// it in the `Platform` vtable.
+#[derive(Debug, Clone, Copy)]
+pub struct LinuxPrimaryDisplay {
+   pub primary_display: usize,
+   pub displays: usize,
+}
+
+pub const LINUX_PRIMARY_DISPLAY_PROLOGUE: Prologue = Prologue {
+   pattern: Pattern::new("41 57 41 56 53 48 83 EC ?? 48 B8 FF FF FF FF FF FF FF 7F"),
+   len: 19,
+};
+
+pub fn linux_primary_display(image: &Image<'_>) -> Found<LinuxPrimaryDisplay> {
+   const PRIMARY: Pattern = Pattern::new(
+      "41 57 41 56 53 48 83 EC ?? 48 B8 FF FF FF FF FF FF FF 7F 48 8B 4F ?? 48 39 C1 0F 83 ?? ?? \
+       ?? ?? 48 89 FB 48 8D 51 01 48 89 57 ?? 83 7F ?? 02 0F 85",
+   );
+   if Abi::of(image) != Abi::SysV {
+      return Err("the Linux primary display is decoded on Linux builds only".to_owned());
+   }
+   let primary_display = one("Linux primary_display", &image.scan(PRIMARY))?;
+   let code_at = |slot: usize| image.read_usize(slot).filter(|&func| image.is_code(func));
+   // Skips the `.rela.dyn` addend `sigscan` also sees.
+   let slots: Vec<usize> = image
+      .pointers_to(primary_display)
+      .into_iter()
+      .filter(|&slot| slot >= 8 && code_at(slot - 8).is_some() && code_at(slot + 8).is_some())
+      .collect();
+   let slot = one("Linux primary_display vtable slot", &slots)?;
+   let displays = code_at(slot - 8).ok_or("Linux displays vtable slot did not decode")?;
+   Ok(LinuxPrimaryDisplay {
+      primary_display,
+      displays,
    })
 }
 
@@ -3237,6 +3424,7 @@ pub fn text_fields(image: &Image<'_>) -> Found<TextFields> {
    const READ_PANIC: &[u8] = b"readmana_gpui::components::rich_text::state::RichTextState";
    const TEXT_INPUT_TYPE: &[u8] = b"mana_html::hosted::text_input::TextInput";
    const TEXT_AREA_TYPE: &[u8] = b"mana_html::hosted::text_area::TextArea";
+   const LOCK_DEC: [u8; 4] = [0xF0, 0x48, 0xFF, 0x08];
 
    let abi = Abi::of(image);
    let (ctor_single, ctor_multi, inner_a) = field_state_new(image, abi)?;
@@ -3380,6 +3568,15 @@ pub fn text_fields(image: &Image<'_>) -> Found<TextFields> {
          .iter()
          .any(|load| code.windows(load.len()).any(|w| w == load.as_slice()))
    };
+   // ELF repeats the store on the unwind path.
+   let cleared_slots = |body: &[u8]| {
+      let mut stores = none_stores(body);
+      if stores.is_empty() {
+         stores = none_stores_through(body);
+      }
+      stores.dedup();
+      stores
+   };
    let set_value_hits: Vec<(usize, &Vec<(usize, usize)>)> = c_calls
       .iter()
       .filter(|(func, calls)| {
@@ -3400,49 +3597,92 @@ pub fn text_fields(image: &Image<'_>) -> Found<TextFields> {
          let Some(body) = image.read(start, end - start) else {
             return false;
          };
-         // ELF repeats the store on the unwind path.
-         let mut stores = none_stores(body);
-         stores.dedup();
+         let stores = cleared_slots(body);
          stores.len() == 1 && loads_len(body)
       })
       .map(|(f, calls)| (*f, calls))
       .collect();
-   if set_value_hits.len() != 1 {
+
+   // `arc_drop_slow` is called right after `lock dec qword ptr [rax]` (`F0 48
+   // FF 08`), or, where the drop is outlined, tail-jumped to after it at the
+   // end of the `SharedString` drop's own tail jump.
+   let outlined_drop_slow = |drop: usize| {
+      let tail = |func: usize| {
+         let (start, end) = image
+            .function_bounds(func)
+            .filter(|&(start, end)| end - start <= 0x20)?;
+         let body = image.read(start, end - start)?;
+         let target = phoenix_hook::x86::disasm(body, start, usize::MAX)
+            .into_iter()
+            .filter_map(|line| jump_target(image, image.read(line.addr, line.len)?, line.addr))
+            .find(|&target| !(start..end).contains(&target))?;
+         Some((body, target))
+      };
+      let (_, inner) = tail(drop)?;
+      let (body, target) = tail(inner)?;
+      body.windows(4).any(|w| w == LOCK_DEC).then_some(target)
+   };
+   let set_value_callees = |sv_calls: &[(usize, usize)]| -> Found<(usize, bool, usize)> {
+      let inline = sv_calls.iter().find_map(|&(site, callee)| {
+         let before = image.read(site.saturating_sub(24), 24)?;
+         before.windows(4).any(|w| w == LOCK_DEC).then_some(callee)
+      });
+      let arc_drop_slow = inline
+         .or_else(|| {
+            sv_calls
+               .iter()
+               .find_map(|&(_, callee)| outlined_drop_slow(callee))
+         })
+         .ok_or("Arc<str>::drop_slow not found in FieldState::set_value")?;
+
+      // `update_entity_dyn` is called in `set_value` right after the name's
+      // length and begins with `inc qword ptr [arg0 + disp32]`.
+      let update_entity_dyn = sv_calls
+         .iter()
+         .find_map(|&(site, callee)| {
+            if !loads_len(image.read(site.saturating_sub(32), 32)?) {
+               return None;
+            }
+            let head = image.read(callee, 0x40)?;
+            head
+               .windows(3)
+               .any(|w| w == inc_disp32(abi.arg(0)))
+               .then_some(callee)
+         })
+         .ok_or("App::update_entity_dyn not found in FieldState::set_value")?;
+      Ok((arc_drop_slow, inline.is_some(), update_entity_dyn))
+   };
+   // ELF can keep two copies of `set_value` from different codegen units,
+   // one with its drops outlined, each calling its own `Arc<str>::drop_slow`.
+   let (resolved, failed): (Vec<_>, Vec<_>) = set_value_hits
+      .iter()
+      .map(|&(func, calls)| set_value_callees(calls).map(|found| (func, found)))
+      .partition(Result::is_ok);
+   let resolved = resolved
+      .into_iter()
+      .filter_map(Result::ok)
+      .collect::<Vec<(usize, (usize, bool, usize))>>();
+   if resolved.is_empty()
+      && let Some(Err(err)) = failed.into_iter().next()
+   {
+      return Err(err);
+   }
+   let Some(&(set_value, (arc_drop_slow, _, update_entity_dyn))) = resolved
+      .iter()
+      .find(|(_, (_, inline, _))| *inline)
+      .or_else(|| resolved.first())
+   else {
+      return Err("FieldState::set_value matched 0 functions".to_owned());
+   };
+   if resolved
+      .iter()
+      .any(|&(_, (_, _, found))| found != update_entity_dyn)
+   {
       return Err(format!(
-         "FieldState::set_value matched {} functions",
-         set_value_hits.len()
+         "FieldState::set_value matched {} functions that disagree",
+         resolved.len()
       ));
    }
-   let (set_value, sv_calls) = set_value_hits[0];
-
-   // `arc_drop_slow` is called right after `lock dec qword ptr [rax]` (`F0 48 FF
-   // 08`).
-   let arc_drop_slow = sv_calls
-      .iter()
-      .find_map(|&(site, callee)| {
-         let before = image.read(site.saturating_sub(24), 24)?;
-         before
-            .windows(4)
-            .any(|w| w == [0xF0, 0x48, 0xFF, 0x08])
-            .then_some(callee)
-      })
-      .ok_or("Arc<str>::drop_slow not found in FieldState::set_value")?;
-
-   // `update_entity_dyn` is called in `set_value` right after the name's
-   // length and begins with `inc qword ptr [arg0 + disp32]`.
-   let update_entity_dyn = sv_calls
-      .iter()
-      .find_map(|&(site, callee)| {
-         if !loads_len(image.read(site.saturating_sub(32), 32)?) {
-            return None;
-         }
-         let head = image.read(callee, 0x40)?;
-         head
-            .windows(3)
-            .any(|w| w == inc_disp32(abi.arg(0)))
-            .then_some(callee)
-      })
-      .ok_or("App::update_entity_dyn not found in FieldState::set_value")?;
 
    // Several hosted elements share `HOSTED_NEW`, so each is the one that fills
    // its own size.
@@ -3499,7 +3739,7 @@ pub fn text_fields(image: &Image<'_>) -> Found<TextFields> {
 
    // `FieldState::new` ends by writing `None` into its three
    // `Option<SharedString>`s; the one `set_value` clears is the pending value.
-   let pending_value = none_stores(function_code(image, set_value, "FieldState::set_value")?)[0];
+   let pending_value = cleared_slots(function_code(image, set_value, "FieldState::set_value")?)[0];
    let slots = field_slots(image, inner_a)
       .filter(|slots| slots.contains(&pending_value))
       .ok_or("FieldState::new no longer clears three SharedString slots")?;

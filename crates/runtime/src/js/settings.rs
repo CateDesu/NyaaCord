@@ -6,12 +6,12 @@ use rquickjs::{CatchResultExt, Ctx, Exception, Function, IntoJs, Object, Value, 
 
 use crate::{
    Choice, Chosen, Control,
-   js::{Engine, Registry, drain},
+   js::{Engine, Registry},
 };
 
 impl Engine {
    pub fn set_setting(&self, plugin: &str, key: &str, value: Chosen) {
-      self.context.with(|ctx| {
+      self.with(|ctx| {
          let js_value = match &value {
             Chosen::Switch(on) => Ok(Value::new_bool(ctx.clone(), *on)),
             Chosen::Number(number) => Ok(Value::new_float(ctx.clone(), *number)),
@@ -41,13 +41,11 @@ impl Engine {
             log::error!("[{plugin}] {key} onChange: {err}");
          }
       });
-      drain(&self.runtime);
-      let _ = self.take_choices_dirty();
       self.save_choices();
    }
 
    pub fn press(&self, plugin: &str, key: &str) {
-      self.context.with(|ctx| {
+      self.with(|ctx| {
          let handler = ctx.userdata::<Registry<'_>>().and_then(|registry| {
             registry
                .defined
@@ -66,7 +64,6 @@ impl Engine {
             log::error!("[{plugin}] {key}: {err}");
          }
       });
-      self.drain_and_flush();
    }
 }
 
@@ -293,6 +290,7 @@ fn write_setting<'js>(
       .insert(key.to_owned(), next);
    redact_secrets(&registry);
    registry.choices_dirty.store(true, Ordering::Release);
+   drop(registry);
    if let Some(platform) = crate::platform() {
       platform.refresh();
    }
